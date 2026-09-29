@@ -231,15 +231,8 @@
 
 /* ---------- Today button + date lock ---------- */
 .rc-field-today {
-  flex: 0 0 auto;
-  min-width: 0;
-  justify-content: flex-end;
-}
-
-.rc-label-spacer {
-  /* invisible spacer that aligns the Today button with sibling inputs */
-  visibility: hidden;
-  pointer-events: none;
+  flex: 1 1 140px;   /* same flex basis as sibling rc-field, but can be narrower */
+  max-width: 180px;
 }
 
 .rc-btn-today {
@@ -253,6 +246,7 @@
   background: var(--rc-input-bg);
   color: var(--rc-text-secondary);
   white-space: nowrap;
+  width: 100%;
   transition: background var(--rc-transition), border-color var(--rc-transition),
     color var(--rc-transition), box-shadow var(--rc-transition);
 }

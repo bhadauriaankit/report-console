@@ -241,7 +241,7 @@ export default function ReportConsole() {
       {/* ── Filter card ── */}
       <div className="rc-card rc-filter-card">
 
-        {/* Row 1: selects + date range */}
+        {/* Row 1: Report type + Status */}
         <div className="rc-filter-row">
           <div className="rc-field">
             <label className="rc-label" htmlFor="rc-report-type">Report type</label>
@@ -271,8 +271,10 @@ export default function ReportConsole() {
               ))}
             </select>
           </div>
+        </div>
 
-          {/* Date from */}
+        {/* Row 2: Date range + Today */}
+        <div className="rc-filter-row">
           <div className="rc-field">
             <label className="rc-label" htmlFor="rc-date-from">Date from</label>
             <input
@@ -288,7 +290,6 @@ export default function ReportConsole() {
             />
           </div>
 
-          {/* Date to */}
           <div className="rc-field">
             <label className="rc-label" htmlFor="rc-date-to">Date to</label>
             <input
@@ -304,10 +305,8 @@ export default function ReportConsole() {
             />
           </div>
 
-
-          {/* Today quick-select */}
           <div className="rc-field rc-field-today">
-            <label className="rc-label rc-label-spacer">&nbsp;</label>
+            <label className="rc-label">Quick select</label>
             <button
               type="button"
               className={`rc-btn-today${todayMode ? ' rc-btn-today--active' : ''}`}
@@ -315,11 +314,10 @@ export default function ReportConsole() {
               disabled={isLoading}
               title={todayMode ? 'Click to switch to a custom date range' : 'Set both dates to today'}
             >
-              Today
+              {todayMode ? '📅 Today (active)' : '📅 Today'}
             </button>
           </div>
         </div>
-
 
         {/* Divider + action row */}
         <hr className="rc-divider" />
@@ -333,6 +331,7 @@ export default function ReportConsole() {
           </button>
         </div>
       </div>
+
 
 
       {/* ── Results card ── */}
