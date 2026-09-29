@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reports</title>
+<style>
+  :root {
+    --ink:#1c2230; --ink-soft:#4b5468; --ink-faint:#8791a3;
+    --line:#dde1e8; --surface:#fff; --page:#f3f4f7;
+    --accent:#2f5d8a; --accent-soft:#e8eff6;
+    --ok:#2f7a52; --ok-soft:#eaf3ee; --danger:#a3352f; --danger-soft:#f8ebea;
+    --warn:#8a6210; --warn-soft:#f8f1df;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ink:#e7e9ee; --ink-soft:#aab0bf; --ink-faint:#737a8a;
+      --line:#2b3040; --surface:#171a23; --page:#10121a;
+      --accent:#7fa8d1; --accent-soft:#1c2a3a;
+      --ok:#7fc79c; --ok-soft:#1d3226; --danger:#e08a85; --danger-soft:#3a2220;
+      --warn:#d9b45f; --warn-soft:#352c14;
+    }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--page); color:var(--ink);
+    font:15px/1.5 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; }
+  .wrap { max-width:960px; margin:0 auto; padding:28px 20px 60px; }
+  header { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:18px; }
+  h1 { font-size:20px; font-weight:500; margin:0; }
+  .conn { font-size:13px; color:var(--ink-soft); display:flex; align-items:center; gap:8px; }
+  .dot { width:9px; height:9px; border-radius:50%; background:var(--ink-faint); }
+  .dot.on { background:var(--ok); } .dot.off { background:var(--danger); }
+  button { font:inherit; font-size:13px; color:var(--ink); background:var(--surface);
+    border:1px solid var(--line); border-radius:6px; padding:6px 12px; cursor:pointer; }
+  .empty { text-align:center; color:var(--ink-faint); padding:48px 0; font-size:14px; }
+  .evt { background:var(--surface); border:1px solid var(--line); border-radius:6px; margin-bottom:10px; overflow:hidden; }
+  .evt-head { display:flex; align-items:center; gap:10px; padding:10px 14px; flex-wrap:wrap; }
+  .badge { font-size:11.5px; padding:2px 9px; border-radius:999px; background:var(--accent-soft); color:var(--accent); }
+  .badge.callback { background:var(--ok-soft); color:var(--ok); }
+  .badge.request { background:var(--warn-soft); color:var(--warn); }
+  .badge.error { background:var(--danger-soft); color:var(--danger); }
+  .time { font-size:12.5px; color:var(--ink-faint); }
+  .rid { font-size:12.5px; color:var(--ink-soft); font-family:ui-monospace,Menlo,Consolas,monospace; }
+  .sum { font-size:13.5px; color:var(--ink-soft); }
+  .tbl { overflow-x:auto; border-top:1px solid var(--line); }
+  table { border-collapse:collapse; width:100%; min-width:400px; }
+  th,td { text-align:left; padding:7px 14px; font-size:13px; white-space:nowrap; border-bottom:1px solid var(--line); }
+  th { background:var(--page); color:var(--ink-soft); font-weight:500; }
+  tr:last-child td { border-bottom:none; }
+  .card { background:var(--surface); border:1px solid var(--line); border-radius:8px; padding:16px; margin-bottom:18px; }
+  .form { display:flex; gap:12px; align-items:flex-end; flex-wrap:wrap; }
+  label { display:flex; flex-direction:column; gap:4px; font-size:12.5px; color:var(--ink-soft); }
+  select { font:inherit; font-size:14px; color:var(--ink); background:var(--surface);
+    border:1px solid var(--line); border-radius:6px; padding:7px 10px; min-width:190px; }
+  button.primary { background:var(--accent); color:#fff; border-color:var(--accent); padding:8px 18px; font-size:14px; }
+  button:disabled { opacity:.55; cursor:default; }
+  .state { margin-top:14px; font-size:14px; color:var(--ink-soft); }
+  .state.err { color:var(--danger); } .state.done { color:var(--ok); }
+  .spin { display:inline-block; width:12px; height:12px; border:2px solid var(--line); border-top-color:var(--accent);
+    border-radius:50%; animation:sp .8s linear infinite; vertical-align:-2px; margin-right:6px; }
+  @keyframes sp { to { transform:rotate(360deg); } }
+  h2 { font-size:15px; font-weight:500; margin:22px 0 10px; color:var(--ink-soft); }
+  #result .tbl { border:1px solid var(--line); border-radius:6px; margin-top:12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Reports</h1>
+      <div class="conn"><span class="dot" id="dot"></span><span id="connText">Connecting…</span></div>
+    </div>
+    <button id="clearBtn">Clear view</button>
+  </header>
+  <div class="card">
+    <div class="form">
+      <label>Report type<select id="reportType"></select></label>
+      <label>Status<select id="status"></select></label>
+      <button class="primary" id="sendBtn" disabled>Get report</button>
+    </div>
+    <div class="state" id="state"></div>
+    <div id="result"></div>
+  </div>
+  <h2>Live events</h2>
+  <div id="list"><div class="empty" id="empty">No events yet.</div></div>
+</div>
+
+<script>
+const list = document.getElementById('list');
+const empty = document.getElementById('empty');
+const dot = document.getElementById('dot');
+const connText = document.getElementById('connText');
+const seen = new Set();
+
+function esc(v) {
+  return String(v ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+}
+
+function summary(e) {
+  switch (e.type) {
+    case 'callback': return `${esc(e.status)}: ${esc(e.totalRecords)} record(s)` +
+                            (e.errorMessage ? ' - ' + esc(e.errorMessage) : '');
+    case 'request':  return `${esc(e.reportType)} / ${esc(e.status || 'All')}`;
+    case 'error':    return esc(e.message);
+    default:         return '';
+  }
+}
+
+function dataTable(rows) {
+  if (!rows || !rows.length) return '';
+  const cols = [...new Set(rows.flatMap(r => Object.keys(r)))];
+  return '<div class="tbl"><table><thead><tr>' + cols.map(c => `<th>${esc(c)}</th>`).join('') +
+    '</tr></thead><tbody>' +
+    rows.map(r => '<tr>' + cols.map(c => `<td>${esc(r[c])}</td>`).join('') + '</tr>').join('') +
+    '</tbody></table></div>';
+}
+
+function render(e) {
+  if (seen.has(e.id)) return;
+  seen.add(e.id);
+  if (empty) empty.remove();
+  const div = document.createElement('div');
+  div.className = 'evt';
+  div.innerHTML =
+    `<div class="evt-head">
+       <span class="badge ${esc(e.type)}">${esc(e.type)}</span>
+       <span class="time">${new Date(e.time).toLocaleTimeString()}</span>
+       ${e.requestId ? `<span class="rid">${esc(e.requestId.slice(0, 8))}</span>` : ''}
+       <span class="sum">${summary(e)}</span>
+     </div>` + (e.type === 'callback' ? dataTable(e.data) : '');
+  list.prepend(div);
+}
+
+document.getElementById('clearBtn').onclick = () => { list.innerHTML = ''; };
+
+const es = new EventSource('/api/events');
+es.onopen = () => { dot.className = 'dot on'; connText.textContent = 'Live'; };
+es.onerror = () => { dot.className = 'dot off'; connText.textContent = 'Disconnected, retrying…'; };
+es.onmessage = (m) => { const e = JSON.parse(m.data); render(e); handleMine(e); };
+
+// ---------- request form ----------
+const $ = (id) => document.getElementById(id);
+let currentId = null, timer = null, poll = null;
+
+function setState(text, cls = '', spinning = false) {
+  const el = $('state');
+  el.className = 'state ' + cls;
+  el.innerHTML = (spinning ? '<span class="spin"></span>' : '') + esc(text);
+}
+
+function stopWaiting() {
+  clearTimeout(timer); clearInterval(poll);
+  $('sendBtn').disabled = false;
+}
+
+function showResult(e) {
+  stopWaiting();
+  if (e.status !== 'SUCCESS') {
+    setState(e.errorMessage || `Scaler returned ${e.status}`, 'err');
+    return;
+  }
+  setState(`Done: ${e.totalRecords} record(s)`, 'done');
+  $('result').innerHTML = e.data.length ? dataTable(e.data) : '';
+}
+
+// Handles events that belong to the request this page just sent
+function handleMine(e) {
+  if (!currentId || e.requestId !== currentId) return;
+  if (e.type === 'callback') showResult(e);
+  else if (e.type === 'error') { stopWaiting(); setState(e.message, 'err'); }
+}
+
+async function loadConfig() {
+  const cfg = await (await fetch('/api/config')).json();
+  $('reportType').innerHTML = cfg.reportTypes.map(t => `<option value="${esc(t)}">${esc(t)}</option>`).join('');
+  $('status').innerHTML = '<option value="">All</option>' +
+    cfg.statuses.map(t => `<option value="${esc(t)}">${esc(t)}</option>`).join('');
+  $('sendBtn').disabled = false;
+}
+
+$('sendBtn').onclick = async () => {
+  $('sendBtn').disabled = true;
+  $('result').innerHTML = '';
+  setState('Sending request to Scaler…', '', true);
+  currentId = (crypto.randomUUID ? crypto.randomUUID() : 'r-' + Date.now() + '-' + Math.random().toString(16).slice(2));
+  const sentId = currentId;
+  try {
+    const r = await fetch('/api/reports/request', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ requestId: sentId, reportType: $('reportType').value, status: $('status').value }),
+    });
+    const body = await r.json();
+    if (!r.ok) { stopWaiting(); setState(body.error || 'Request failed', 'err'); return; }
+    if (!$('sendBtn').disabled) return; // result already arrived via the live stream
+    setState('Scaler is processing the request…', '', true);
+    // Fallback in case the live stream drops: poll for the stored result
+    fetch('/api/results/' + currentId).then(async (x) => { if (x.ok) showResult(await x.json()); });
+    poll = setInterval(async () => {
+      const x = await fetch('/api/results/' + currentId);
+      if (x.ok) showResult(await x.json());
+    }, 3000);
+    timer = setTimeout(() => { stopWaiting(); setState('No response from Scaler after 60 seconds.', 'err'); }, 60000);
+  } catch (err) {
+    stopWaiting(); setState('Could not reach the backend: ' + err.message, 'err');
+  }
+};
+
+loadConfig().catch(() => setState('Could not load report options from the backend.', 'err'));
+
+</script>
+</body>
+</html>

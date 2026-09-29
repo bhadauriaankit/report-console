@@ -1,0 +1,633 @@
+/* =========================================================
+   ReportConsole.css – dark-first design system
+   ========================================================= */
+
+/* ---------- CSS Variables (dark palette, always on) ---------- */
+:root {
+  --rc-page-bg:      #0f131a;
+  --rc-card-bg:      #161b26;
+  --rc-card-border:  #262d3b;
+  --rc-input-bg:     #1c2230;
+  --rc-input-border: #2e3748;
+
+  --rc-text-primary:   #e8eaf0;
+  --rc-text-secondary: #8b95a8;
+  --rc-text-muted:     #4e5868;
+
+  --rc-accent:       #4f8ef7;
+  --rc-accent-hover: #6aa0ff;
+  --rc-accent-dim:   rgba(79, 142, 247, 0.12);
+
+  --rc-danger:       #f87171;
+  --rc-danger-bg:    rgba(248, 113, 113, 0.1);
+  --rc-danger-border:rgba(248, 113, 113, 0.25);
+
+  --rc-ok:           #4ade80;
+  --rc-ok-bg:        rgba(74, 222, 128, 0.1);
+  --rc-ok-border:    rgba(74, 222, 128, 0.3);
+
+  --rc-warn:         #fbbf24;
+  --rc-warn-bg:      rgba(251, 191, 36, 0.1);
+  --rc-warn-border:  rgba(251, 191, 36, 0.3);
+
+  --rc-row-sep:      rgba(38, 45, 59, 0.8);
+
+  --rc-radius-sm: 6px;
+  --rc-radius-md: 10px;
+  --rc-radius-lg: 14px;
+
+  --rc-transition: 140ms ease;
+}
+
+/* ---------- Reset (scoped to rc-page subtree) ---------- */
+.rc-page *,
+.rc-page *::before,
+.rc-page *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+/* ---------- Page shell ---------- */
+.rc-page {
+  min-height: 100vh;
+  background: var(--rc-page-bg);
+  color: var(--rc-text-primary);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  font-size: 14px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  padding: 40px 20px 80px;
+}
+
+/* ---------- Page header ---------- */
+.rc-page-header {
+  max-width: 860px;
+  margin: 0 auto 28px;
+}
+
+.rc-page-title {
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  color: var(--rc-text-primary);
+  margin-bottom: 6px;
+}
+
+.rc-page-subtitle {
+  font-size: 14px;
+  color: var(--rc-text-secondary);
+}
+
+/* ---------- Cards ---------- */
+.rc-card {
+  max-width: 860px;
+  margin: 0 auto 20px;
+  background: var(--rc-card-bg);
+  border: 1px solid var(--rc-card-border);
+  border-radius: var(--rc-radius-lg);
+  padding: 24px;
+}
+
+/* ---------- Error banner ---------- */
+.rc-error-banner {
+  max-width: 860px;
+  margin: 0 auto 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border-radius: var(--rc-radius-md);
+  background: var(--rc-danger-bg);
+  border: 1px solid var(--rc-danger-border);
+  color: var(--rc-danger);
+  font-size: 13.5px;
+  font-weight: 500;
+  animation: rc-fade-in 0.2s ease;
+}
+
+.rc-error-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.rc-banner-close {
+  flex-shrink: 0;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 2px;
+  border-radius: var(--rc-radius-sm);
+  color: var(--rc-danger);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: opacity var(--rc-transition);
+}
+
+.rc-banner-close:hover { opacity: 0.7; }
+.rc-banner-close:focus-visible {
+  outline: 2px solid var(--rc-danger);
+  outline-offset: 2px;
+}
+
+.rc-banner-close svg {
+  width: 15px;
+  height: 15px;
+  stroke: currentColor;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  fill: none;
+}
+
+/* ---------- Filter card layout ---------- */
+.rc-filter-card {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.rc-filter-row {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+/* ---------- Form fields ---------- */
+.rc-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1 1 200px;
+}
+
+.rc-field-wide {
+  flex: 1 1 300px;
+}
+
+.rc-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--rc-text-secondary);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  user-select: none;
+}
+
+/* ── Shared input / select styles ── */
+.rc-page select,
+.rc-page input[type="text"] {
+  font: inherit;
+  font-size: 14px;
+  color: var(--rc-text-primary);
+  background: var(--rc-input-bg);
+  border: 1px solid var(--rc-input-border);
+  border-radius: 8px;
+  padding: 9px 12px;
+  width: 100%;
+  transition: border-color var(--rc-transition), box-shadow var(--rc-transition);
+  outline: none;
+}
+
+.rc-page select {
+  appearance: none;
+  padding-right: 36px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='none' stroke='%238b95a8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='4 6 8 10 12 6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  cursor: pointer;
+}
+
+.rc-page select:hover:not(:disabled),
+.rc-page input[type="text"]:hover:not(:disabled) {
+  border-color: var(--rc-accent);
+}
+
+.rc-page select:focus,
+.rc-page input[type="text"]:focus {
+  border-color: var(--rc-accent);
+  box-shadow: 0 0 0 3px var(--rc-accent-dim);
+}
+
+.rc-page select:disabled,
+.rc-page input[type="text"]:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* ── placeholder text ── */
+.rc-page input::placeholder {
+  color: var(--rc-text-muted);
+}
+
+/* ---------- Divider ---------- */
+.rc-divider {
+  border: none;
+  border-top: 1px solid var(--rc-card-border);
+  margin: 0;
+}
+
+/* ---------- Today button + date lock ---------- */
+.rc-field-today {
+  flex: 0 0 auto;
+  min-width: 0;
+  justify-content: flex-end;
+}
+
+.rc-label-spacer {
+  /* invisible spacer that aligns the Today button with sibling inputs */
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.rc-btn-today {
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  border-radius: var(--rc-radius-sm);
+  border: 1px solid var(--rc-input-border);
+  padding: 9px 16px;
+  background: var(--rc-input-bg);
+  color: var(--rc-text-secondary);
+  white-space: nowrap;
+  transition: background var(--rc-transition), border-color var(--rc-transition),
+    color var(--rc-transition), box-shadow var(--rc-transition);
+}
+
+.rc-btn-today:hover:not(:disabled) {
+  border-color: var(--rc-accent);
+  color: var(--rc-accent);
+  background: var(--rc-accent-dim);
+}
+
+.rc-btn-today:focus-visible {
+  outline: 2px solid var(--rc-accent);
+  outline-offset: 2px;
+}
+
+.rc-btn-today:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* Active = today mode is engaged */
+.rc-btn-today--active {
+  border-color: var(--rc-accent);
+  color: var(--rc-accent);
+  background: var(--rc-accent-dim);
+  box-shadow: 0 0 0 2px var(--rc-accent-dim);
+}
+
+/* Date input when locked to Today */
+.rc-page input.rc-date-locked {
+  border-color: var(--rc-accent);
+  box-shadow: 0 0 0 2px var(--rc-accent-dim);
+  color: var(--rc-accent);
+  cursor: default;
+}
+
+
+/* ---------- Action row ---------- */
+.rc-action-row {
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* ---------- Primary button ---------- */
+.rc-btn-primary {
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  border-radius: var(--rc-radius-sm);
+  border: 1px solid var(--rc-accent);
+  padding: 9px 22px;
+  background: var(--rc-accent);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  transition: background var(--rc-transition), border-color var(--rc-transition),
+    opacity var(--rc-transition), box-shadow var(--rc-transition);
+  box-shadow: 0 1px 4px rgba(79, 142, 247, 0.3);
+  white-space: nowrap;
+}
+
+.rc-btn-primary:hover:not(:disabled) {
+  background: var(--rc-accent-hover);
+  border-color: var(--rc-accent-hover);
+  box-shadow: 0 2px 8px rgba(79, 142, 247, 0.45);
+}
+
+.rc-btn-primary:focus-visible {
+  outline: 2px solid var(--rc-accent);
+  outline-offset: 2px;
+}
+
+.rc-btn-primary:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+/* ---------- Results card ---------- */
+.rc-results-card {
+  padding: 0;
+  overflow: hidden;
+}
+
+.rc-results-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--rc-card-border);
+  flex-wrap: wrap;
+}
+
+.rc-results-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--rc-text-primary);
+  letter-spacing: -0.01em;
+}
+
+.rc-results-header-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+/* ---------- Record-count pill ---------- */
+.rc-pill {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 3px 12px;
+  border-radius: 999px;
+  background: var(--rc-accent-dim);
+  border: 1px solid rgba(79, 142, 247, 0.25);
+  color: var(--rc-accent);
+  white-space: nowrap;
+  user-select: none;
+}
+
+/* ---------- Export controls ---------- */
+.rc-export-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.rc-export-select {
+  font: inherit;
+  font-size: 13px;
+  color: var(--rc-text-secondary);
+  background: var(--rc-input-bg);
+  border: 1px solid var(--rc-input-border);
+  border-radius: var(--rc-radius-sm);
+  padding: 5px 28px 5px 10px;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' fill='none' stroke='%238b95a8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='3 5 7 9 11 5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  cursor: pointer;
+  outline: none;
+  transition: border-color var(--rc-transition);
+}
+
+.rc-export-select:hover { border-color: var(--rc-accent); }
+.rc-export-select:focus-visible { border-color: var(--rc-accent); box-shadow: 0 0 0 3px var(--rc-accent-dim); }
+
+.rc-btn-export {
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  border-radius: var(--rc-radius-sm);
+  border: 1px solid var(--rc-card-border);
+  padding: 5px 14px;
+  background: var(--rc-input-bg);
+  color: var(--rc-text-secondary);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: background var(--rc-transition), border-color var(--rc-transition),
+    color var(--rc-transition);
+  white-space: nowrap;
+}
+
+.rc-btn-export:hover {
+  background: var(--rc-accent-dim);
+  border-color: var(--rc-accent);
+  color: var(--rc-accent);
+}
+
+.rc-btn-export:focus-visible {
+  outline: 2px solid var(--rc-accent);
+  outline-offset: 2px;
+}
+
+.rc-btn-export svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  fill: none;
+}
+
+/* ---------- Placeholder / empty states ---------- */
+.rc-placeholder {
+  padding: 56px 20px;
+  text-align: center;
+  color: var(--rc-text-muted);
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+
+.rc-empty {
+  color: var(--rc-text-secondary);
+}
+
+/* ---------- Spinner ---------- */
+.rc-spinner {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(139, 149, 168, 0.25);
+  border-top-color: var(--rc-accent);
+  border-radius: 50%;
+  animation: rc-spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes rc-spin { to { transform: rotate(360deg); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .rc-spinner { animation-duration: 3s; }
+}
+
+/* ---------- Table ---------- */
+.rc-table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.rc-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 13.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.rc-table thead tr {
+  background: rgba(255, 255, 255, 0.02);
+  border-bottom: 1px solid var(--rc-card-border);
+}
+
+.rc-table th {
+  text-align: left;
+  padding: 11px 16px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--rc-text-muted);
+  white-space: nowrap;
+  user-select: none;
+}
+
+.rc-table td {
+  text-align: left;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--rc-row-sep);
+  color: var(--rc-text-secondary);
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.rc-table td:first-child {
+  color: var(--rc-text-primary);
+  font-weight: 500;
+}
+
+.rc-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.rc-table tbody tr {
+  transition: background var(--rc-transition);
+}
+
+.rc-table tbody tr:hover {
+  background: rgba(255, 255, 255, 0.025);
+}
+
+/* ---------- Status badges ---------- */
+.rc-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+.rc-badge::before {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
+}
+
+.badge-complete {
+  color: var(--rc-ok);
+  background: var(--rc-ok-bg);
+  border-color: var(--rc-ok-border);
+}
+
+.badge-failed {
+  color: var(--rc-danger);
+  background: var(--rc-danger-bg);
+  border-color: var(--rc-danger-border);
+}
+
+.badge-pending {
+  color: var(--rc-warn);
+  background: var(--rc-warn-bg);
+  border-color: var(--rc-warn-border);
+}
+
+.badge-neutral {
+  color: var(--rc-text-secondary);
+  background: rgba(139, 149, 168, 0.1);
+  border-color: rgba(139, 149, 168, 0.2);
+}
+
+/* ---------- Animations ---------- */
+@keyframes rc-fade-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.rc-results-card {
+  animation: rc-fade-in 0.25s ease;
+}
+
+/* ---------- Responsive ---------- */
+@media (max-width: 600px) {
+  .rc-page { padding: 24px 14px 60px; }
+
+  .rc-page-title { font-size: 20px; }
+
+  .rc-filter-row {
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .rc-field,
+  .rc-field-wide {
+    flex: 1 1 100%;
+  }
+
+  .rc-action-row {
+    justify-content: stretch;
+  }
+
+  .rc-btn-primary {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .rc-results-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .rc-results-header-right {
+    width: 100%;
+    justify-content: space-between;
+  }
+}
+
+@media (max-width: 400px) {
+  .rc-export-group {
+    flex-wrap: wrap;
+  }
+}
