@@ -144,7 +144,14 @@ app.get('/api/config', (_req, res) =>
 );
 
 app.post('/api/reports/request', express.json(), async (req, res) => {
-  const { reportType, status = '', requestId: clientId } = req.body || {};
+  const {
+    reportType,
+    status = '',
+    requestId: clientId,
+    datePreset,
+    dateFrom,
+    dateTo,
+  } = req.body || {};
   if (!REPORT_TYPES.includes(reportType)) {
     return res.status(400).json({ error: `reportType must be one of: ${REPORT_TYPES.join(', ')}` });
   }
@@ -157,7 +164,15 @@ app.post('/api/reports/request', express.json(), async (req, res) => {
   const requestId = typeof clientId === 'string' && /^[\w-]{8,64}$/.test(clientId)
     ? clientId
     : crypto.randomUUID();
+
+  // Build the job forwarded to Scaler — only include date fields when present
   const job = { requestId, reportType, status };
+  if (datePreset)              job.datePreset = datePreset;
+  if (!datePreset && dateFrom) job.dateFrom   = dateFrom;
+  if (!datePreset && dateTo)   job.dateTo     = dateTo;
+
+  console.log('Raw request:', JSON.stringify(job));
+
   pending.set(requestId, Date.now());
   emit('request', job);
 
@@ -180,6 +195,7 @@ app.post('/api/reports/request', express.json(), async (req, res) => {
 
   return res.status(202).json({ requestId: job.requestId });
 });
+
 
 // Invalid JSON on the callback route: report it instead of Express's HTML error page
 app.use((err, req, res, _next) => {
