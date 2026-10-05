@@ -21,7 +21,7 @@ export const sendRequest = (payload) =>
  * @param {string} requestId   - Unique id for SSE/polling correlation.
  * @param {string} reportType  - Required report type key.
  * @param {string} [status]    - Optional status filter; omitted when empty.
- * @param {string} [datePreset]- "today" activates the preset; omit dateFrom/dateTo when set.
+ * @param {string} [datePreset]- "today" activates the preset.
  * @param {string} [dateFrom]  - ISO date string (yyyy-mm-dd); omitted when empty.
  * @param {string} [dateTo]    - ISO date string (yyyy-mm-dd); omitted when empty.
  */
@@ -29,8 +29,8 @@ export const fetchReportData = (requestId, reportType, status, datePreset, dateF
   const payload = { requestId, reportType };
   if (status)     payload.status     = status;
   if (datePreset) payload.datePreset = datePreset;
-  if (!datePreset && dateFrom) payload.dateFrom = dateFrom;
-  if (!datePreset && dateTo)   payload.dateTo   = dateTo;
+  if (dateFrom)   payload.dateFrom   = dateFrom;
+  if (dateTo)     payload.dateTo     = dateTo;
   return fetch(`${API}/api/reports/request`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -42,3 +42,11 @@ export const getResult = (requestId) =>
   fetch(`${API}/api/results/${encodeURIComponent(requestId)}`).then(json);
 
 export const eventsUrl = `${API}/api/events`;
+
+// ── PostgreSQL Live Monitor helpers (uses API variable from env) ──
+export const getPgTables = () => fetch(`${API}/api/pg/tables`).then(json);
+export const getPgRows = (table) =>
+  fetch(`${API}/api/pg/rows?table=${encodeURIComponent(table)}`).then(json);
+export const pgStreamUrl = (table) =>
+  `${API}/api/pg/stream?table=${encodeURIComponent(table)}`;
+

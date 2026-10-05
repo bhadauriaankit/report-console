@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { getPgTables, getPgRows, pgStreamUrl } from './api.js';
 import './LiveMonitor.css';
-
-const API = import.meta.env.VITE_API_URL || 'http://localhost:4000';
 
 /* ── helpers ── */
 const toLabel = (key) =>
@@ -61,28 +60,32 @@ function MonitorTable({ rows, newIds }) {
 
 /* ── Main component ── */
 export default function LiveMonitor() {
-  const [tables, setTables]       = useState([]);
-  const [table, setTable]         = useState('');
-  const [rows, setRows]           = useState([]);
+  const [tables, setTables]         = useState([]);
+  const [table, setTable]           = useState('');
+  const [rows, setRows]             = useState([]);
   const [hasFetched, setHasFetched] = useState(false);
-  const [loading, setLoading]     = useState(false);
-  const [streaming, setStreaming]  = useState(false);
-  const [error, setError]         = useState('');
-  const [newIds, setNewIds]       = useState(new Set());
-  const [liveCount, setLiveCount] = useState(0);
+  const [loading, setLoading]       = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [streaming, setStreaming]   = useState(false);
+  const [error, setError]           = useState('');
+  const [newIds, setNewIds]         = useState(new Set());
+  const [liveCount, setLiveCount]   = useState(0);
+  const [lastRefreshed, setLastRefreshed] = useState(null);
 
   const esRef = useRef(null);
 
   /* ── Load table list on mount ── */
   useEffect(() => {
-    fetch(`${API}/api/pg/tables`)
-      .then((r) => r.json())
+    getPgTables()
       .then((d) => {
-        if (d.tables?.length) {
-          setTables(d.tables);
-          setTable(d.tables[0]);
+        if (d.ok && d.body?.tables?.length) {
+          setTables(d.body.tables);
+          setTable(d.body.tables[0]);
         } else {
-          setError('No tables found – check your PostgreSQL connection in backend/.env');
+          setError(
+            d.body?.error ||
+              'No tables found — please check your PostgreSQL connection in backend/.env'
+          );
         }
       })
       .catch((e) => setError(`Cannot reach backend: ${e.message}`));
@@ -90,13 +93,36 @@ export default function LiveMonitor() {
 
   /* ── Close SSE when table changes ── */
   const closeStream = useCallback(() => {
-    if (esRef.current) { esRef.current.close(); esRef.current = null; }
+    if (esRef.current) {
+      esRef.current.close();
+      esRef.current = null;
+    }
     setStreaming(false);
   }, []);
 
-  useEffect(() => { closeStream(); }, [table, closeStream]);
+  useEffect(() => {
+    closeStream();
+  }, [table, closeStream]);
 
-  /* ── Fetch latest 20 rows ── */
+  /* ── Fetch rows without re-opening stream (used by Refresh button) ── */
+  const fetchRowsOnly = useCallback(async () => {
+    if (!table) return;
+    setRefreshing(true);
+    setError('');
+    try {
+      const d = await getPgRows(table);
+      if (!d.ok) throw new Error(d.body?.error || `HTTP ${d.status}`);
+      setRows(d.body.rows || []);
+      setHasFetched(true);
+      setLastRefreshed(new Date().toLocaleTimeString());
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [table]);
+
+  /* ── Fetch latest 20 rows and start SSE stream ── */
   const handleFetch = useCallback(async () => {
     if (!table) return;
     closeStream();
@@ -104,12 +130,13 @@ export default function LiveMonitor() {
     setError('');
     setNewIds(new Set());
     setLiveCount(0);
+
     try {
-      const r = await fetch(`${API}/api/pg/rows?table=${encodeURIComponent(table)}`);
-      const d = await r.json();
-      if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
-      setRows(d.rows);
+      const d = await getPgRows(table);
+      if (!d.ok) throw new Error(d.body?.error || `HTTP ${d.status}`);
+      setRows(d.body.rows || []);
       setHasFetched(true);
+      setLastRefreshed(new Date().toLocaleTimeString());
     } catch (e) {
       setError(e.message);
     } finally {
@@ -117,7 +144,7 @@ export default function LiveMonitor() {
     }
 
     /* ── Start live stream ── */
-    const es = new EventSource(`${API}/api/pg/stream?table=${encodeURIComponent(table)}`);
+    const es = new EventSource(pgStreamUrl(table));
     esRef.current = es;
 
     es.onopen = () => setStreaming(true);
@@ -128,7 +155,7 @@ export default function LiveMonitor() {
         if (msg.type === 'insert') {
           setRows((prev) => {
             const next = [msg.row, ...prev].slice(0, 20);
-            setNewIds(new Set([0])); // index 0 is always the newest
+            setNewIds(new Set([0])); // index 0 is always the newest row
             setTimeout(() => setNewIds(new Set()), 2500);
             return next;
           });
@@ -146,8 +173,15 @@ export default function LiveMonitor() {
     };
   }, [table, closeStream]);
 
+  /* ── Manual Refresh ── */
+  const handleRefresh = useCallback(() => {
+    fetchRowsOnly();
+  }, [fetchRowsOnly]);
+
   /* ── Cleanup on unmount ── */
   useEffect(() => () => closeStream(), [closeStream]);
+
+  const busy = loading || refreshing;
 
   return (
     <div className="lm-page">
@@ -177,21 +211,39 @@ export default function LiveMonitor() {
             <select
               id="lm-table"
               value={table}
-              onChange={(e) => { setTable(e.target.value); setHasFetched(false); setRows([]); }}
-              disabled={loading || !tables.length}
+              onChange={(e) => {
+                setTable(e.target.value);
+                setHasFetched(false);
+                setRows([]);
+              }}
+              disabled={busy || !tables.length}
             >
               {tables.map((t) => <option key={t} value={t}>{t}</option>)}
             </select>
           </div>
 
+          {/* Fetch Button */}
           <button
             className="lm-btn-primary"
             onClick={handleFetch}
-            disabled={loading || !table}
+            disabled={busy || !table}
           >
             {loading ? <span className="lm-spinner" /> : <IconRefresh />}
-            {loading ? 'Fetching…' : 'Fetch'}
+            {loading ? 'Fetching…' : (hasFetched ? 'Re-fetch' : 'Fetch')}
           </button>
+
+          {/* Refresh Button */}
+          {hasFetched && (
+            <button
+              className="lm-btn-secondary"
+              onClick={handleRefresh}
+              disabled={busy || !table}
+              title="Refresh latest 20 rows from PostgreSQL"
+            >
+              {refreshing ? <span className="lm-spinner" /> : <IconRefresh />}
+              {refreshing ? 'Refreshing…' : 'Refresh'}
+            </button>
+          )}
 
           {/* Live badge */}
           <span className={`lm-live-badge ${streaming ? 'lm-live-badge--on' : ''}`}>
@@ -208,13 +260,33 @@ export default function LiveMonitor() {
             <IconDatabase />
             {hasFetched ? table : 'Results'}
           </span>
-          {hasFetched && (
-            <span className="lm-pill">{rows.length} row{rows.length !== 1 ? 's' : ''}</span>
-          )}
+          <div className="lm-results-header-right">
+            {lastRefreshed && (
+              <span className="lm-refreshed-time" title="Last refreshed time">
+                Updated {lastRefreshed}
+              </span>
+            )}
+            {hasFetched && (
+              <button
+                className="lm-btn-icon-refresh"
+                onClick={handleRefresh}
+                disabled={busy}
+                title="Refresh latest rows"
+              >
+                <IconRefresh />
+                <span>Refresh</span>
+              </button>
+            )}
+            {hasFetched && (
+              <span className="lm-pill">{rows.length} row{rows.length !== 1 ? 's' : ''}</span>
+            )}
+          </div>
         </div>
 
         {!hasFetched && !loading && (
-          <div className="lm-placeholder">Select a table and click <strong>Fetch</strong> to begin.</div>
+          <div className="lm-placeholder">
+            Select a table and click <strong>Fetch</strong> to begin.
+          </div>
         )}
 
         {loading && (

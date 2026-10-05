@@ -182,13 +182,19 @@ app.post('/api/reports/request', express.json(), async (req, res) => {
     ? clientId
     : crypto.randomUUID();
 
-  // Build the job forwarded to Scaler — only include date fields when present
+  // Build the job forwarded to Scaler — always forward date fields when present
   const job = { requestId, reportType, status };
-  if (datePreset)              job.datePreset = datePreset;
-  if (!datePreset && dateFrom) job.dateFrom   = dateFrom;
-  if (!datePreset && dateTo)   job.dateTo     = dateTo;
+  if (datePreset) job.datePreset = datePreset;
+  if (dateFrom)   job.dateFrom   = dateFrom;
+  if (dateTo)     job.dateTo     = dateTo;
 
   console.log('Raw request:', JSON.stringify(job));
+
+  if (!SCALER_URL) {
+    const message = 'SCALER_URL is not configured in backend/.env';
+    emit('error', { requestId: job.requestId, message });
+    return res.status(503).json({ requestId: job.requestId, error: message });
+  }
 
   pending.set(requestId, Date.now());
   emit('request', job);
@@ -280,15 +286,60 @@ app.get('/api/pg/tables', async (_req, res) => {
   }
 });
 
-// GET /api/pg/rows?table=xxx  – fetch latest 20 rows (ordered by ctid desc)
+/** Detect best column to order by so latest date/timestamp/ID rows appear first */
+async function getTableOrderClause(pool, table) {
+  try {
+    const { rows } = await pool.query(
+      `SELECT column_name, data_type
+         FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name   = $1`,
+      [table]
+    );
+    if (!rows || rows.length === 0) return 'ctid DESC';
+
+    const colNames = rows.map((r) => r.column_name.toLowerCase());
+
+    // 1. Look for known timestamp / date columns
+    const priorityDateCols = [
+      'created_at', 'creation_date', 'create_time', 'created_date',
+      'generated_date', 'date', 'statement_date', 'transaction_date',
+      'inserted_at', 'timestamp', 'updated_at', 'record_date'
+    ];
+    for (const cand of priorityDateCols) {
+      const idx = colNames.indexOf(cand);
+      if (idx !== -1) return `"${rows[idx].column_name}" DESC`;
+    }
+
+    // 2. Any column with date or timestamp in data_type
+    const dateTypeRow = rows.find((r) =>
+      r.data_type.includes('timestamp') || r.data_type === 'date'
+    );
+    if (dateTypeRow) return `"${dateTypeRow.column_name}" DESC`;
+
+    // 3. Primary key / ID column (id, *_id)
+    const idRow = rows.find((r) => r.column_name.toLowerCase() === 'id');
+    if (idRow) return `"${idRow.column_name}" DESC`;
+
+    const anyIdRow = rows.find((r) => r.column_name.toLowerCase().endsWith('_id'));
+    if (anyIdRow) return `"${anyIdRow.column_name}" DESC`;
+
+    return 'ctid DESC';
+  } catch (_) {
+    return 'ctid DESC';
+  }
+}
+
+// GET /api/pg/rows?table=xxx  – fetch latest 20 rows (ordered by latest date/id desc)
 app.get('/api/pg/rows', async (req, res) => {
   const table = req.query.table;
   if (!validTable(table)) return res.status(400).json({ error: 'Invalid table name' });
   try {
+    const orderClause = await getTableOrderClause(pgPool, table);
     const { rows } = await pgPool.query(
-      `SELECT * FROM "${table}" ORDER BY ctid DESC LIMIT 20`
+      `SELECT * FROM "${table}" ORDER BY ${orderClause} LIMIT 20`
     );
-    res.json({ rows });
+    res.json({ rows, orderClause });
   } catch (err) {
     console.error('[pg/rows]', err.message);
     res.status(500).json({ error: err.message });

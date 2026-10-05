@@ -104,6 +104,96 @@
   flex-shrink: 0;
 }
 
+/* ── Secondary Refresh button ── */
+.lm-btn-secondary {
+  font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  padding: 9px 18px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  background: var(--surface);
+  color: var(--ink-2);
+  transition: all 150ms ease;
+  box-shadow: var(--shadow-sm);
+}
+
+.lm-btn-secondary:hover:not(:disabled) {
+  border-color: var(--border-hover);
+  background: var(--surface-alt);
+  color: var(--ink);
+}
+
+.lm-btn-secondary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.lm-btn-secondary svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  flex-shrink: 0;
+}
+
+/* ── Header right & icon refresh button ── */
+.lm-results-header-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.lm-refreshed-time {
+  font-size: 12px;
+  color: var(--ink-4);
+}
+
+.lm-btn-icon-refresh {
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  padding: 4px 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--surface);
+  color: var(--ink-3);
+  transition: all 150ms ease;
+}
+
+.lm-btn-icon-refresh:hover:not(:disabled) {
+  color: var(--ink);
+  border-color: var(--border-hover);
+  background: var(--surface-alt);
+}
+
+.lm-btn-icon-refresh:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.lm-btn-icon-refresh svg {
+  width: 13px;
+  height: 13px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 /* ── Live badge ── */
 .lm-live-badge {
   display: inline-flex;

@@ -189,7 +189,8 @@ export default function ReportConsole() {
     setErrorBanner('');
     setHasFetched(true);
     if (todayMode) {
-      run(reportType, status, 'today', undefined, undefined);
+      const today = getTodayStr();
+      run(reportType, status, 'today', today, today);
     } else {
       run(reportType, status, undefined, dateFrom || undefined, dateTo || undefined);
     }
