@@ -5,37 +5,45 @@ import crypto from 'node:crypto';
 import pg from 'pg';
 
 // ---------------------------------------------------------------
-// PostgreSQL pool (for Live Monitor)
+// PostgreSQL pool & configuration (strictly from environment variables)
 // ---------------------------------------------------------------
 const { Pool, Client } = pg;
-const pgPool = new Pool({
-  host:     process.env.PG_HOST     || 'localhost',
-  port:     Number(process.env.PG_PORT || 5432),
-  database: process.env.PG_DATABASE || 'postgres',
-  user:     process.env.PG_USER     || 'postgres',
-  password: process.env.PG_PASSWORD || '',
+
+// Prevent pg from auto-converting DATE and TIMESTAMP into JS Date objects
+// (which shifts dates backward by timezone offset when serialized to JSON).
+// OID 1082 = DATE, OID 1114 = TIMESTAMP WITHOUT TIME ZONE
+pg.types.setTypeParser(1082, (str) => str);
+pg.types.setTypeParser(1114, (str) => str);
+
+const pgConfig = {
+  host:     process.env.PG_HOST,
+  port:     process.env.PG_PORT ? Number(process.env.PG_PORT) : undefined,
+  database: process.env.PG_DATABASE,
+  user:     process.env.PG_USER,
+  password: process.env.PG_PASSWORD,
   ssl:      process.env.PG_SSL === 'true' ? { rejectUnauthorized: false } : false,
-  max: 5,
-});
+};
+
+const pgPool = new Pool({ ...pgConfig, max: 5 });
 
 pgPool.on('error', (err) => console.error('[pg pool error]', err.message));
 
 // ---------------------------------------------------------------
-// Config (see .env.example)
+// Config (strictly from environment variables)
 // ---------------------------------------------------------------
-const PORT = Number(process.env.PORT || 4000);
+const PORT = process.env.PORT ? Number(process.env.PORT) : 4000;
 const CALLBACK_SECRET = process.env.CALLBACK_SECRET || '';
-const CORS_ORIGIN = (process.env.CORS_ORIGIN || 'http://localhost:5173')
-  .split(',')
-  .map((s) => s.trim());
+const CORS_ORIGIN = process.env.CORS_ORIGIN
+  ? process.env.CORS_ORIGIN.split(',').map((s) => s.trim())
+  : [];
 
-// Where the backend triggers the Scaler workflow (HTTP Input URL)
-const SCALER_URL = process.env.SCALER_URL || 'http://localhost:30800/rest/api/submit-job/reports';
-const SCALER_AUTH = process.env.SCALER_AUTH || ''; // optional Authorization header value
+// Scaler configuration from environment variables
+const SCALER_URL = process.env.SCALER_URL;
+const SCALER_AUTH = process.env.SCALER_AUTH;
 
-const csv = (v, d) => (v || d).split(',').map((s) => s.trim()).filter(Boolean);
-const REPORT_TYPES = csv(process.env.REPORT_TYPES, 'annual_statements,enrollments');
-const REPORT_STATUSES = csv(process.env.REPORT_STATUSES, 'COMPLETE,PENDING,FAILED');
+const csv = (v) => (v || '').split(',').map((s) => s.trim()).filter(Boolean);
+const REPORT_TYPES = csv(process.env.REPORT_TYPES);
+const REPORT_STATUSES = csv(process.env.REPORT_STATUSES);
 
 // ---------------------------------------------------------------
 // In-memory state
@@ -360,14 +368,7 @@ app.get('/api/pg/stream', async (req, res) => {
   res.flushHeaders();
 
   // Dedicated client per SSE connection (LISTEN requires a dedicated conn)
-  const client = new Client({
-    host:     process.env.PG_HOST     || 'localhost',
-    port:     Number(process.env.PG_PORT || 5432),
-    database: process.env.PG_DATABASE || 'postgres',
-    user:     process.env.PG_USER     || 'postgres',
-    password: process.env.PG_PASSWORD || '',
-    ssl:      process.env.PG_SSL === 'true' ? { rejectUnauthorized: false } : false,
-  });
+  const client = new Client(pgConfig);
 
   const channel = `lm_${table}`;
 
