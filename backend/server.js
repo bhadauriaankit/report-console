@@ -2,6 +2,23 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import crypto from 'node:crypto';
+import pg from 'pg';
+
+// ---------------------------------------------------------------
+// PostgreSQL pool (for Live Monitor)
+// ---------------------------------------------------------------
+const { Pool, Client } = pg;
+const pgPool = new Pool({
+  host:     process.env.PG_HOST     || 'localhost',
+  port:     Number(process.env.PG_PORT || 5432),
+  database: process.env.PG_DATABASE || 'postgres',
+  user:     process.env.PG_USER     || 'postgres',
+  password: process.env.PG_PASSWORD || '',
+  ssl:      process.env.PG_SSL === 'true' ? { rejectUnauthorized: false } : false,
+  max: 5,
+});
+
+pgPool.on('error', (err) => console.error('[pg pool error]', err.message));
 
 // ---------------------------------------------------------------
 // Config (see .env.example)
@@ -237,6 +254,119 @@ app.get('/api/results/:requestId', (req, res) => {
   return found ? res.json(found) : res.status(404).json({ error: 'Not found' });
 });
 
+
+
+// ---------------------------------------------------------------
+// Live Monitor – PostgreSQL endpoints
+// ---------------------------------------------------------------
+
+/** Allowed table name: only word chars, max 64 chars */
+const validTable = (t) => typeof t === 'string' && /^\w{1,64}$/.test(t);
+
+// GET /api/pg/tables  – list all user tables in the connected DB
+app.get('/api/pg/tables', async (_req, res) => {
+  try {
+    const { rows } = await pgPool.query(
+      `SELECT table_name
+         FROM information_schema.tables
+        WHERE table_schema = 'public'
+          AND table_type   = 'BASE TABLE'
+        ORDER BY table_name`
+    );
+    res.json({ tables: rows.map((r) => r.table_name) });
+  } catch (err) {
+    console.error('[pg/tables]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/pg/rows?table=xxx  – fetch latest 20 rows (ordered by ctid desc)
+app.get('/api/pg/rows', async (req, res) => {
+  const table = req.query.table;
+  if (!validTable(table)) return res.status(400).json({ error: 'Invalid table name' });
+  try {
+    const { rows } = await pgPool.query(
+      `SELECT * FROM "${table}" ORDER BY ctid DESC LIMIT 20`
+    );
+    res.json({ rows });
+  } catch (err) {
+    console.error('[pg/rows]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/pg/stream?table=xxx  – SSE stream of new inserts via LISTEN/NOTIFY
+// Requires a trigger on the table. If missing, we auto-create it.
+app.get('/api/pg/stream', async (req, res) => {
+  const table = req.query.table;
+  if (!validTable(table)) return res.status(400).json({ error: 'Invalid table name' });
+
+  res.set({
+    'Content-Type':  'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection:      'keep-alive',
+  });
+  res.flushHeaders();
+
+  // Dedicated client per SSE connection (LISTEN requires a dedicated conn)
+  const client = new Client({
+    host:     process.env.PG_HOST     || 'localhost',
+    port:     Number(process.env.PG_PORT || 5432),
+    database: process.env.PG_DATABASE || 'postgres',
+    user:     process.env.PG_USER     || 'postgres',
+    password: process.env.PG_PASSWORD || '',
+    ssl:      process.env.PG_SSL === 'true' ? { rejectUnauthorized: false } : false,
+  });
+
+  const channel = `lm_${table}`;
+
+  const cleanup = () => { try { client.end(); } catch (_) {} };
+
+  try {
+    await client.connect();
+
+    // Auto-create trigger function + trigger if they don't exist
+    await client.query(`
+      CREATE OR REPLACE FUNCTION _lm_notify_fn()
+      RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN
+        PERFORM pg_notify(TG_ARGV[0], row_to_json(NEW)::text);
+        RETURN NEW;
+      END;
+      $$;
+    `);
+
+    // Drop + recreate trigger so it always uses the latest channel name
+    await client.query(`DROP TRIGGER IF EXISTS _lm_notify ON "${table}"`);
+    await client.query(`
+      CREATE TRIGGER _lm_notify
+      AFTER INSERT ON "${table}"
+      FOR EACH ROW EXECUTE FUNCTION _lm_notify_fn('${channel}')
+    `);
+
+    await client.query(`LISTEN "${channel}"`);
+
+    // Push new rows as SSE events
+    client.on('notification', (msg) => {
+      try {
+        const row = JSON.parse(msg.payload);
+        res.write(`data: ${JSON.stringify({ type: 'insert', row })}\n\n`);
+      } catch (_) {}
+    });
+
+    // Keep-alive ping every 20s
+    const ping = setInterval(() => res.write(': ping\n\n'), 20000);
+
+    req.on('close', () => {
+      clearInterval(ping);
+      cleanup();
+    });
+  } catch (err) {
+    console.error('[pg/stream]', err.message);
+    res.write(`data: ${JSON.stringify({ type: 'error', message: err.message })}\n\n`);
+    cleanup();
+  }
+});
 
 app.listen(PORT, () => {
   console.log(`Report backend listening on http://localhost:${PORT}`);

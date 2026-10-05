@@ -1,0 +1,311 @@
+/* =========================================================
+   Live Monitor – scoped styles (lm-* prefix)
+   ========================================================= */
+
+/* ── Page layout ── */
+.lm-page {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 32px 20px 72px;
+}
+
+.lm-page-header {
+  margin-bottom: 24px;
+}
+
+.lm-page-title {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--ink);
+  letter-spacing: -0.02em;
+  margin-bottom: 4px;
+}
+
+.lm-page-subtitle {
+  font-size: 14px;
+  color: var(--ink-3);
+}
+
+/* ── Card ── */
+.lm-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  margin-bottom: 20px;
+  overflow: hidden;
+}
+
+.lm-filter-card {
+  padding: 20px 24px;
+}
+
+/* ── Filter row ── */
+.lm-filter-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.lm-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 200px;
+}
+
+.lm-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-2);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+/* ── Primary button ── */
+.lm-btn-primary {
+  font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--accent);
+  padding: 9px 20px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  background: var(--accent);
+  color: #fff;
+  transition: background 150ms ease, box-shadow 150ms ease;
+  box-shadow: 0 1px 3px rgba(37,99,235,.25);
+}
+
+.lm-btn-primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+  box-shadow: 0 2px 6px rgba(37,99,235,.35);
+}
+
+.lm-btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.lm-btn-primary svg {
+  width: 15px;
+  height: 15px;
+  stroke: #fff;
+  fill: none;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  flex-shrink: 0;
+}
+
+/* ── Live badge ── */
+.lm-live-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-alt);
+  color: var(--ink-4);
+  user-select: none;
+  transition: all 150ms ease;
+}
+
+.lm-live-badge svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.lm-live-badge--on {
+  color: var(--ok);
+  border-color: var(--ok-border);
+  background: var(--ok-light);
+  animation: lm-pulse-border 2s ease infinite;
+}
+
+@keyframes lm-pulse-border {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(22,163,74,.25); }
+  50%       { box-shadow: 0 0 0 4px rgba(22,163,74,0); }
+}
+
+/* ── Results header ── */
+.lm-results-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-alt);
+}
+
+.lm-results-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.lm-results-title svg {
+  width: 15px;
+  height: 15px;
+  stroke: var(--ink-3);
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.lm-pill {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--accent-light);
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+/* ── Placeholder ── */
+.lm-placeholder {
+  padding: 48px 20px;
+  text-align: center;
+  color: var(--ink-3);
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+
+.lm-empty { color: var(--ink-4); }
+
+/* ── Table ── */
+.lm-table-scroll {
+  overflow-x: auto;
+}
+
+.lm-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.lm-table thead tr {
+  background: var(--surface-alt);
+  border-bottom: 1px solid var(--border);
+}
+
+.lm-table th {
+  text-align: left;
+  padding: 10px 16px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--ink-3);
+  white-space: nowrap;
+  user-select: none;
+}
+
+.lm-table td {
+  padding: 11px 16px;
+  border-bottom: 1px solid var(--border);
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+
+.lm-table td:first-child {
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.lm-table tbody tr:last-child td { border-bottom: 0; }
+
+.lm-table tbody tr {
+  transition: background 150ms ease;
+}
+
+.lm-table tbody tr:hover {
+  background: var(--surface-alt);
+}
+
+/* ── New row flash ── */
+.lm-row-new {
+  animation: lm-row-flash 2.5s ease forwards;
+}
+
+@keyframes lm-row-flash {
+  0%   { background: color-mix(in srgb, var(--ok) 15%, transparent); }
+  60%  { background: color-mix(in srgb, var(--ok) 8%, transparent); }
+  100% { background: transparent; }
+}
+
+/* ── Spinner ── */
+.lm-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2.5px solid color-mix(in srgb, currentColor 30%, transparent);
+  border-top-color: currentColor;
+  border-radius: 50%;
+  animation: lm-spin 0.75s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes lm-spin { to { transform: rotate(360deg); } }
+
+/* ── Error banner ── */
+.lm-error-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border-radius: var(--radius-sm);
+  background: var(--danger-light);
+  border: 1px solid var(--danger-border);
+  color: var(--danger);
+  font-size: 13.5px;
+  font-weight: 500;
+  margin-bottom: 16px;
+}
+
+.lm-banner-close {
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.lm-banner-close:hover { background: color-mix(in srgb, currentColor 10%, transparent); }
+
+/* ── Responsive ── */
+@media (max-width: 600px) {
+  .lm-filter-row { flex-direction: column; align-items: stretch; }
+  .lm-field { min-width: unset; }
+  .lm-btn-primary { justify-content: center; }
+}
