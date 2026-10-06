@@ -454,6 +454,25 @@ app.get('/api/pg/file', (req, res) => {
     const filename = path.basename(resolved);
     const isDownload = req.query.download === '1' || req.query.download === 'true';
 
+    const ext = path.extname(filename).toLowerCase();
+    const mimeTypes = {
+      '.html': 'text/html; charset=utf-8',
+      '.htm': 'text/html; charset=utf-8',
+      '.pdf': 'application/pdf',
+      '.png': 'image/png',
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.gif': 'image/gif',
+      '.webp': 'image/webp',
+      '.svg': 'image/svg+xml',
+      '.txt': 'text/plain; charset=utf-8',
+      '.json': 'application/json; charset=utf-8',
+      '.csv': 'text/csv; charset=utf-8',
+    };
+    if (mimeTypes[ext]) {
+      res.setHeader('Content-Type', mimeTypes[ext]);
+    }
+
     res.setHeader('Content-Disposition', `${isDownload ? 'attachment' : 'inline'}; filename="${filename}"`);
     fs.createReadStream(resolved).pipe(res);
   } catch (err) {

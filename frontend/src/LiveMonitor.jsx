@@ -23,35 +23,61 @@ const statusClass = (val) => {
 };
 
 /* ── Content Detectors ── */
-function isHtmlColumn(colName, val) {
-  const name = String(colName || '').toLowerCase();
-  if (name.includes('html') || name.includes('template') || name.includes('markup')) return true;
-  if (!val || typeof val !== 'string') return false;
-  const s = val.trim();
-  if (s.startsWith('data:text/html')) return true;
-  if (s.startsWith('<!DOCTYPE html') || s.startsWith('<html') || s.startsWith('<div') || s.startsWith('<body')) return true;
-  if (s.length > 30 && s.includes('</') && /<[a-z][\s\S]*>/i.test(s)) return true;
-  // Raw base64 that decodes to HTML
-  if (/^[A-Za-z0-9+/=]{30,}$/.test(s) && (s.startsWith('PCFET0') || s.startsWith('PGh0bW') || s.startsWith('PGRpd'))) return true;
-  return false;
-}
-
-function extractHtmlContent(val) {
-  if (!val) return '';
+function analyzeHtml(val, colName = 'html') {
+  if (!val) return null;
   const s = String(val).trim();
-  if (s.startsWith('data:text/html;base64,')) {
-    try { return atob(s.split(',')[1]); } catch (_) { return s; }
+  if (!s) return null;
+
+  const colLower = String(colName).toLowerCase();
+  const isLikelyHtmlCol = /html|template|markup/i.test(colLower);
+
+  // 1. File path to HTML (e.g. E:/.../statement.html or path in an HTML column)
+  const isPathLike = (s.includes('/') || s.includes('\\')) && !s.includes('<');
+  if (/\.(html?)$/i.test(s) || (isLikelyHtmlCol && isPathLike)) {
+    const filename = s.replace(/\\/g, '/').split('/').pop() || `${colName}.html`;
+    return {
+      kind: 'path',
+      type: 'html',
+      path: s,
+      filename: filename.endsWith('.html') || filename.endsWith('.htm') ? filename : `${filename}.html`,
+    };
   }
+
+  // 2. URL to HTML
+  if (s.startsWith('http://') || s.startsWith('https://')) {
+    if (isLikelyHtmlCol || /\.(html?)(\?|$)/i.test(s)) {
+      const filename = s.split('/').pop().split('?')[0] || `${colName}.html`;
+      return { kind: 'url', type: 'html', url: s, filename };
+    }
+  }
+
+  // 3. Data URI
   if (s.startsWith('data:text/html')) {
-    try { return decodeURIComponent(s.split(',')[1]); } catch (_) { return s; }
+    let content = s;
+    if (s.startsWith('data:text/html;base64,')) {
+      try { content = atob(s.split(',')[1]); } catch (_) {}
+    } else {
+      try { content = decodeURIComponent(s.split(',')[1]); } catch (_) {}
+    }
+    return { kind: 'html', type: 'html', content, filename: `${colName}.html` };
   }
+
+  // 4. Base64 encoded HTML string
   if (/^[A-Za-z0-9+/=]{20,}$/.test(s) && !s.includes('<')) {
     try {
       const decoded = atob(s);
-      if (/<[a-z][\s\S]*>/i.test(decoded)) return decoded;
+      if (/<[a-z][\s\S]*>/i.test(decoded)) {
+        return { kind: 'html', type: 'html', content: decoded, filename: `${colName}.html` };
+      }
     } catch (_) {}
   }
-  return s;
+
+  // 5. Raw HTML string or HTML column
+  if (isLikelyHtmlCol || s.startsWith('<!DOCTYPE html') || s.startsWith('<html') || s.startsWith('<div') || (s.includes('</') && /<[a-z][\s\S]*>/i.test(s))) {
+    return { kind: 'html', type: 'html', content: s, filename: `${colName}.html` };
+  }
+
+  return null;
 }
 
 function analyzeAttachment(val, colName = 'attachment') {
@@ -149,14 +175,14 @@ const IconWifi = () => (
 );
 
 const IconEye = () => (
-  <svg viewBox="0 0 24 24" aria-hidden="true" width="13" height="13">
+  <svg viewBox="0 0 24 24" aria-hidden="true" width="14" height="14">
     <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
     <circle cx="12" cy="12" r="3"/>
   </svg>
 );
 
 const IconDownload = () => (
-  <svg viewBox="0 0 24 24" aria-hidden="true" width="13" height="13">
+  <svg viewBox="0 0 24 24" aria-hidden="true" width="14" height="14">
     <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
     <polyline points="7 10 12 15 17 10"/>
     <line x1="12" y1="15" x2="12" y2="3"/>
@@ -206,15 +232,12 @@ function MediaCell({ col, val, rowIndex, onPreview, onDownload }) {
     return <span className="lm-val-empty">—</span>;
   }
 
-  // Check if it's HTML
-  if (isHtmlColumn(col, val)) {
-    const htmlText = extractHtmlContent(val);
+  // 1. Check if HTML
+  const htmlInfo = analyzeHtml(val, `${col}_row${rowIndex + 1}`);
+  if (htmlInfo) {
     const mediaObj = {
       title: `${toLabel(col)} #${rowIndex + 1}`,
-      kind: 'html',
-      type: 'html',
-      content: htmlText,
-      filename: `${col}_row${rowIndex + 1}.html`,
+      ...htmlInfo,
     };
 
     return (
@@ -225,26 +248,28 @@ function MediaCell({ col, val, rowIndex, onPreview, onDownload }) {
         <div className="lm-media-actions">
           <button
             type="button"
-            className="lm-btn-media lm-btn-preview"
+            className="lm-btn-media-icon lm-btn-preview"
             onClick={() => onPreview(mediaObj)}
             title="Preview HTML"
+            aria-label="Preview HTML"
           >
-            <IconEye /> Preview
+            <IconEye />
           </button>
           <button
             type="button"
-            className="lm-btn-media lm-btn-download"
+            className="lm-btn-media-icon lm-btn-download"
             onClick={() => onDownload(mediaObj)}
-            title="Download HTML file"
+            title="Download HTML"
+            aria-label="Download HTML"
           >
-            <IconDownload /> Download
+            <IconDownload />
           </button>
         </div>
       </div>
     );
   }
 
-  // Check if it's Attachment
+  // 2. Check if Attachment
   const attachInfo = analyzeAttachment(val, `${col}_row${rowIndex + 1}`);
   if (attachInfo) {
     const mediaObj = {
@@ -260,26 +285,28 @@ function MediaCell({ col, val, rowIndex, onPreview, onDownload }) {
         <div className="lm-media-actions">
           <button
             type="button"
-            className="lm-btn-media lm-btn-preview"
+            className="lm-btn-media-icon lm-btn-preview"
             onClick={() => onPreview(mediaObj)}
             title="Preview Attachment"
+            aria-label="Preview Attachment"
           >
-            <IconEye /> Preview
+            <IconEye />
           </button>
           <button
             type="button"
-            className="lm-btn-media lm-btn-download"
+            className="lm-btn-media-icon lm-btn-download"
             onClick={() => onDownload(mediaObj)}
-            title="Download file"
+            title="Download Attachment"
+            aria-label="Download Attachment"
           >
-            <IconDownload /> Download
+            <IconDownload />
           </button>
         </div>
       </div>
     );
   }
 
-  // Check if it's Status
+  // 3. Status
   if (col.toLowerCase() === 'status') {
     return <span className={`lm-badge ${statusClass(val)}`}>{String(val)}</span>;
   }

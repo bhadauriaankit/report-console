@@ -583,12 +583,38 @@ button:disabled {
   flex-shrink: 0;
 }
 
+/* ── Icon-only media action buttons (compact & clean) ── */
+.lm-btn-media-icon {
+  font: inherit;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface);
+  color: var(--ink-2);
+  transition: all 120ms ease;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.lm-btn-media-icon svg {
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2.2;
+}
+
+.lm-btn-media-icon.lm-btn-preview:hover,
 .lm-btn-preview:hover {
   background: var(--accent-light);
   border-color: color-mix(in srgb, var(--accent) 30%, transparent);
   color: var(--accent);
 }
 
+.lm-btn-media-icon.lm-btn-download:hover,
 .lm-btn-download:hover {
   background: var(--ok-light);
   border-color: var(--ok-border);

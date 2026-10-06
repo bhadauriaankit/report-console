@@ -44,6 +44,8 @@ export default function MediaModal({ media, onClose, onDownload }) {
   const [tab, setTab] = useState('visual'); // 'visual' | 'code'
   const [fullscreen, setFullscreen] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [fetchedCode, setFetchedCode] = useState('');
+  const [loadingCode, setLoadingCode] = useState(false);
 
   useEffect(() => {
     const handleKey = (e) => {
@@ -57,14 +59,6 @@ export default function MediaModal({ media, onClose, onDownload }) {
 
   const { title, kind, type, content, dataUri, url, path, filename } = media;
 
-  const handleCopyCode = () => {
-    if (!content) return;
-    navigator.clipboard.writeText(content).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
-  };
-
   // Compute preview source URL if applicable
   let previewSrc = null;
   if (kind === 'data-uri' || kind === 'base64') {
@@ -74,6 +68,28 @@ export default function MediaModal({ media, onClose, onDownload }) {
   } else if (kind === 'path') {
     previewSrc = getPgFileUrl(path, false);
   }
+
+  // Fetch raw HTML text if media is path-based and user switches to 'code' tab
+  useEffect(() => {
+    if (type === 'html' && !content && previewSrc && tab === 'code' && !fetchedCode) {
+      setLoadingCode(true);
+      fetch(previewSrc)
+        .then((r) => r.text())
+        .then((t) => setFetchedCode(t))
+        .catch((e) => setFetchedCode(`<!-- Error loading HTML source: ${e.message} -->`))
+        .finally(() => setLoadingCode(false));
+    }
+  }, [type, content, previewSrc, tab, fetchedCode]);
+
+  const activeSource = content || fetchedCode;
+
+  const handleCopyCode = () => {
+    if (!activeSource) return;
+    navigator.clipboard.writeText(activeSource).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  };
 
   return (
     <div className="lm-modal-backdrop" onClick={onClose} role="dialog" aria-modal="true">
@@ -91,7 +107,7 @@ export default function MediaModal({ media, onClose, onDownload }) {
           </div>
 
           <div className="lm-modal-actions">
-            {kind === 'html' && (
+            {type === 'html' && (
               <div className="lm-modal-tabs">
                 <button
                   type="button"
@@ -145,27 +161,45 @@ export default function MediaModal({ media, onClose, onDownload }) {
         {/* Body */}
         <div className="lm-modal-body">
           {/* HTML Preview */}
-          {kind === 'html' && tab === 'visual' && (
-            <iframe
-              title="HTML Visual Preview"
-              srcDoc={content}
-              className="lm-html-iframe"
-              sandbox="allow-scripts allow-same-origin allow-popups"
-            />
+          {type === 'html' && tab === 'visual' && (
+            content ? (
+              <iframe
+                title="HTML Visual Preview"
+                srcDoc={content}
+                className="lm-html-iframe"
+                sandbox="allow-scripts allow-same-origin allow-popups"
+              />
+            ) : previewSrc ? (
+              <iframe
+                title="HTML Visual Preview"
+                src={previewSrc}
+                className="lm-html-iframe"
+              />
+            ) : (
+              <div className="lm-placeholder">No HTML content available.</div>
+            )
           )}
 
-          {kind === 'html' && tab === 'code' && (
+          {type === 'html' && tab === 'code' && (
             <div className="lm-code-container">
-              <button
-                type="button"
-                className="lm-btn-copy"
-                onClick={handleCopyCode}
-              >
-                {copied ? '✓ Copied' : 'Copy Code'}
-              </button>
-              <pre className="lm-code-pre">
-                <code>{content}</code>
-              </pre>
+              {loadingCode ? (
+                <div className="lm-placeholder" style={{ color: '#94a3b8' }}>
+                  <span className="lm-spinner" /> Loading source code…
+                </div>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    className="lm-btn-copy"
+                    onClick={handleCopyCode}
+                  >
+                    {copied ? '✓ Copied' : 'Copy Code'}
+                  </button>
+                  <pre className="lm-code-pre">
+                    <code>{activeSource || '<!-- No source code available -->'}</code>
+                  </pre>
+                </>
+              )}
             </div>
           )}
 
@@ -186,21 +220,21 @@ export default function MediaModal({ media, onClose, onDownload }) {
           )}
 
           {/* Text preview */}
-          {type === 'text' && content && (
+          {type === 'text' && (content || activeSource) && (
             <div className="lm-code-container">
               <pre className="lm-code-pre">
-                <code>{content}</code>
+                <code>{content || activeSource}</code>
               </pre>
             </div>
           )}
 
           {/* Fallback for binary / path where direct inline preview is not supported */}
-          {(!previewSrc && kind !== 'html' && !content) && (
+          {type !== 'html' && type !== 'pdf' && type !== 'image' && !content && (
             <div className="lm-binary-fallback">
               <div className="lm-binary-icon">📎</div>
               <h3>Attachment Available for Download</h3>
               <p className="lm-binary-filename">{filename || path || 'Attachment file'}</p>
-              {path && <small className="lm-binary-path">Stored at: {path}</small>}
+              {path && <small className="lm-binary-path">File path: {path}</small>}
               {onDownload && (
                 <button
                   type="button"
