@@ -1,14 +1,131 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { getPgTables, getPgRows, pgStreamUrl } from './api.js';
+import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
+import { getPgTables, getPgRows, pgStreamUrl, getPgFileUrl } from './api.js';
+import MediaModal from './MediaModal.jsx';
 import './LiveMonitor.css';
 
-/* ── helpers ── */
+/* ── Helpers ── */
 const toLabel = (key) =>
   key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 
-/* ── icons ── */
+/** Today as "yyyy-mm-dd" in local timezone */
+const getTodayStr = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+
+/** Status badge color class */
+const statusClass = (val) => {
+  const v = String(val).toLowerCase().replace(/\s+/g, '_');
+  if (v === 'complete' || v === 'success' || v === 'active' || v === 'paid') return 'lm-badge-ok';
+  if (v === 'failed' || v === 'error' || v === 'inactive' || v === 'cancelled') return 'lm-badge-err';
+  if (v === 'pending' || v === 'in_progress' || v === 'processing') return 'lm-badge-warn';
+  return 'lm-badge-neutral';
+};
+
+/* ── Content Detectors ── */
+function isHtmlColumn(colName, val) {
+  const name = String(colName || '').toLowerCase();
+  if (name.includes('html') || name.includes('template') || name.includes('markup')) return true;
+  if (!val || typeof val !== 'string') return false;
+  const s = val.trim();
+  if (s.startsWith('data:text/html')) return true;
+  if (s.startsWith('<!DOCTYPE html') || s.startsWith('<html') || s.startsWith('<div') || s.startsWith('<body')) return true;
+  if (s.length > 30 && s.includes('</') && /<[a-z][\s\S]*>/i.test(s)) return true;
+  // Raw base64 that decodes to HTML
+  if (/^[A-Za-z0-9+/=]{30,}$/.test(s) && (s.startsWith('PCFET0') || s.startsWith('PGh0bW') || s.startsWith('PGRpd'))) return true;
+  return false;
+}
+
+function extractHtmlContent(val) {
+  if (!val) return '';
+  const s = String(val).trim();
+  if (s.startsWith('data:text/html;base64,')) {
+    try { return atob(s.split(',')[1]); } catch (_) { return s; }
+  }
+  if (s.startsWith('data:text/html')) {
+    try { return decodeURIComponent(s.split(',')[1]); } catch (_) { return s; }
+  }
+  if (/^[A-Za-z0-9+/=]{20,}$/.test(s) && !s.includes('<')) {
+    try {
+      const decoded = atob(s);
+      if (/<[a-z][\s\S]*>/i.test(decoded)) return decoded;
+    } catch (_) {}
+  }
+  return s;
+}
+
+function analyzeAttachment(val, colName = 'attachment') {
+  if (!val) return null;
+  const s = String(val).trim();
+  if (!s) return null;
+
+  const colLower = String(colName).toLowerCase();
+  const isLikelyAttachCol = /attach|file|doc|pdf|media|upload|image|blob/i.test(colLower);
+
+  // 1. Data URI
+  if (s.startsWith('data:')) {
+    const [meta] = s.split(',');
+    const mime = meta.split(';')[0].replace('data:', '');
+    let type = 'file';
+    let ext = 'bin';
+    if (mime.includes('pdf')) { type = 'pdf'; ext = 'pdf'; }
+    else if (mime.startsWith('image/')) { type = 'image'; ext = mime.split('/')[1] || 'png'; }
+    else if (mime.includes('html')) { type = 'html'; ext = 'html'; }
+    else if (mime.includes('text')) { type = 'text'; ext = 'txt'; }
+    return { kind: 'data-uri', mime, type, ext, dataUri: s, filename: `${colName}.${ext}` };
+  }
+
+  // 2. Base64
+  if (/^[A-Za-z0-9+/=]{30,}$/.test(s) && !s.includes('/') && !s.includes('\\')) {
+    if (s.startsWith('JVBERi0')) {
+      return { kind: 'base64', mime: 'application/pdf', type: 'pdf', ext: 'pdf', dataUri: `data:application/pdf;base64,${s}`, filename: `${colName}.pdf` };
+    }
+    if (s.startsWith('iVBORw0KG')) {
+      return { kind: 'base64', mime: 'image/png', type: 'image', ext: 'png', dataUri: `data:image/png;base64,${s}`, filename: `${colName}.png` };
+    }
+    if (s.startsWith('/9j/')) {
+      return { kind: 'base64', mime: 'image/jpeg', type: 'image', ext: 'jpg', dataUri: `data:image/jpeg;base64,${s}`, filename: `${colName}.jpg` };
+    }
+    if (s.startsWith('R0lGOD')) {
+      return { kind: 'base64', mime: 'image/gif', type: 'image', ext: 'gif', dataUri: `data:image/gif;base64,${s}`, filename: `${colName}.gif` };
+    }
+    if (s.startsWith('UklGR')) {
+      return { kind: 'base64', mime: 'image/webp', type: 'image', ext: 'webp', dataUri: `data:image/webp;base64,${s}`, filename: `${colName}.webp` };
+    }
+    if (isLikelyAttachCol) {
+      return { kind: 'base64', mime: 'application/octet-stream', type: 'file', ext: 'bin', dataUri: `data:application/octet-stream;base64,${s}`, filename: `${colName}.bin` };
+    }
+  }
+
+  // 3. URL
+  if (s.startsWith('http://') || s.startsWith('https://')) {
+    const lower = s.toLowerCase();
+    let type = 'file';
+    if (lower.endsWith('.pdf') || lower.includes('.pdf?')) type = 'pdf';
+    else if (/\.(png|jpe?g|gif|webp|svg)(\?|$)/i.test(lower)) type = 'image';
+    else if (/\.(html?|txt)(\?|$)/i.test(lower)) type = 'text';
+    const filename = s.split('/').pop().split('?')[0] || `${colName}.file`;
+    return { kind: 'url', type, url: s, filename };
+  }
+
+  // 4. File Path
+  if (/\.(pdf|png|jpe?g|gif|webp|svg|docx?|xlsx?|csv|txt|html?|zip)(\s*$|\?)/i.test(s) || (isLikelyAttachCol && (s.includes('/') || s.includes('\\')))) {
+    const lower = s.toLowerCase();
+    let type = 'file';
+    if (lower.endsWith('.pdf')) type = 'pdf';
+    else if (/\.(png|jpe?g|gif|webp|svg)$/i.test(lower)) type = 'image';
+    else if (/\.(html?)$/i.test(lower)) type = 'html';
+    else if (/\.(txt|json|csv)$/i.test(lower)) type = 'text';
+    const filename = s.replace(/\\/g, '/').split('/').pop() || `${colName}.file`;
+    return { kind: 'path', type, path: s, filename };
+  }
+
+  return null;
+}
+
+/* ── Icons ── */
 const IconDatabase = () => (
-  <svg viewBox="0 0 24 24" aria-hidden="true">
+  <svg viewBox="0 0 24 24" aria-hidden="true" width="16" height="16">
     <ellipse cx="12" cy="5" rx="9" ry="3"/>
     <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/>
     <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>
@@ -16,14 +133,14 @@ const IconDatabase = () => (
 );
 
 const IconRefresh = () => (
-  <svg viewBox="0 0 24 24" aria-hidden="true">
+  <svg viewBox="0 0 24 24" aria-hidden="true" width="14" height="14">
     <polyline points="23 4 23 10 17 10"/>
     <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
   </svg>
 );
 
 const IconWifi = () => (
-  <svg viewBox="0 0 24 24" aria-hidden="true">
+  <svg viewBox="0 0 24 24" aria-hidden="true" width="14" height="14">
     <path d="M5 12.55a11 11 0 0 1 14.08 0"/>
     <path d="M1.42 9a16 16 0 0 1 21.16 0"/>
     <path d="M8.53 16.11a6 6 0 0 1 6.95 0"/>
@@ -31,8 +148,152 @@ const IconWifi = () => (
   </svg>
 );
 
-/* ── ResultsTable (shared style but new rows flash) ── */
-function MonitorTable({ rows, newIds }) {
+const IconEye = () => (
+  <svg viewBox="0 0 24 24" aria-hidden="true" width="13" height="13">
+    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+    <circle cx="12" cy="12" r="3"/>
+  </svg>
+);
+
+const IconDownload = () => (
+  <svg viewBox="0 0 24 24" aria-hidden="true" width="13" height="13">
+    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+    <polyline points="7 10 12 15 17 10"/>
+    <line x1="12" y1="15" x2="12" y2="3"/>
+  </svg>
+);
+
+const IconSearch = () => (
+  <svg viewBox="0 0 24 24" aria-hidden="true" width="14" height="14">
+    <circle cx="11" cy="11" r="8"/>
+    <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+  </svg>
+);
+
+/* ── Export helpers ── */
+function exportCSV(columns, rows, tableName) {
+  const escape = (v) => {
+    const s = String(v ?? '');
+    return s.includes(',') || s.includes('"') || s.includes('\n')
+      ? `"${s.replace(/"/g, '""')}"`
+      : s;
+  };
+  const header = columns.map(escape).join(',');
+  const body = rows.map((row) => columns.map((c) => escape(row[c])).join(',')).join('\n');
+  const blob = new Blob([`${header}\n${body}`], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `live_${tableName}_${Date.now()}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function exportJSON(rows, tableName) {
+  const json = JSON.stringify(rows, null, 2);
+  const blob = new Blob([json], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `live_${tableName}_${Date.now()}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+/* ── Media Cell Renderer ── */
+function MediaCell({ col, val, rowIndex, onPreview, onDownload }) {
+  if (val === null || val === undefined || val === '') {
+    return <span className="lm-val-empty">—</span>;
+  }
+
+  // Check if it's HTML
+  if (isHtmlColumn(col, val)) {
+    const htmlText = extractHtmlContent(val);
+    const mediaObj = {
+      title: `${toLabel(col)} #${rowIndex + 1}`,
+      kind: 'html',
+      type: 'html',
+      content: htmlText,
+      filename: `${col}_row${rowIndex + 1}.html`,
+    };
+
+    return (
+      <div className="lm-media-cell">
+        <span className="lm-media-badge lm-badge-html" title="HTML Document">
+          &lt;/&gt; HTML
+        </span>
+        <div className="lm-media-actions">
+          <button
+            type="button"
+            className="lm-btn-media lm-btn-preview"
+            onClick={() => onPreview(mediaObj)}
+            title="Preview HTML"
+          >
+            <IconEye /> Preview
+          </button>
+          <button
+            type="button"
+            className="lm-btn-media lm-btn-download"
+            onClick={() => onDownload(mediaObj)}
+            title="Download HTML file"
+          >
+            <IconDownload /> Download
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Check if it's Attachment
+  const attachInfo = analyzeAttachment(val, `${col}_row${rowIndex + 1}`);
+  if (attachInfo) {
+    const mediaObj = {
+      title: `${toLabel(col)} #${rowIndex + 1}`,
+      ...attachInfo,
+    };
+
+    return (
+      <div className="lm-media-cell">
+        <span className={`lm-media-badge lm-badge-${attachInfo.type}`} title={attachInfo.filename}>
+          📎 {attachInfo.type.toUpperCase()}
+        </span>
+        <div className="lm-media-actions">
+          <button
+            type="button"
+            className="lm-btn-media lm-btn-preview"
+            onClick={() => onPreview(mediaObj)}
+            title="Preview Attachment"
+          >
+            <IconEye /> Preview
+          </button>
+          <button
+            type="button"
+            className="lm-btn-media lm-btn-download"
+            onClick={() => onDownload(mediaObj)}
+            title="Download file"
+          >
+            <IconDownload /> Download
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Check if it's Status
+  if (col.toLowerCase() === 'status') {
+    return <span className={`lm-badge ${statusClass(val)}`}>{String(val)}</span>;
+  }
+
+  const str = String(val);
+  if (str.length > 70) {
+    return <span className="lm-cell-truncate" title={str}>{str}</span>;
+  }
+
+  return <span>{str}</span>;
+}
+
+/* ── Results Table ── */
+function MonitorTable({ rows, newIds, onPreview, onDownload }) {
   if (!rows || rows.length === 0) return null;
   const columns = Object.keys(rows[0]);
 
@@ -41,14 +302,26 @@ function MonitorTable({ rows, newIds }) {
       <table className="lm-table">
         <thead>
           <tr>
-            {columns.map((c) => <th key={c}>{toLabel(c)}</th>)}
+            <th className="lm-th-idx">#</th>
+            {columns.map((c) => (
+              <th key={c}>{toLabel(c)}</th>
+            ))}
           </tr>
         </thead>
         <tbody>
           {rows.map((row, i) => (
             <tr key={i} className={newIds.has(i) ? 'lm-row-new' : ''}>
+              <td className="lm-td-idx">{i + 1}</td>
               {columns.map((c) => (
-                <td key={c}>{String(row[c] ?? '—')}</td>
+                <td key={c}>
+                  <MediaCell
+                    col={c}
+                    val={row[c]}
+                    rowIndex={i}
+                    onPreview={onPreview}
+                    onDownload={onDownload}
+                  />
+                </td>
               ))}
             </tr>
           ))}
@@ -58,7 +331,7 @@ function MonitorTable({ rows, newIds }) {
   );
 }
 
-/* ── Main component ── */
+/* ── Main LiveMonitor Component ── */
 export default function LiveMonitor() {
   const [tables, setTables]         = useState([]);
   const [table, setTable]           = useState('');
@@ -71,6 +344,19 @@ export default function LiveMonitor() {
   const [newIds, setNewIds]         = useState(new Set());
   const [liveCount, setLiveCount]   = useState(0);
   const [lastRefreshed, setLastRefreshed] = useState(null);
+
+  /* ── Date filter & Limit state ── */
+  const [dateFrom, setDateFrom]     = useState('');
+  const [dateTo, setDateTo]         = useState('');
+  const [todayMode, setTodayMode]   = useState(false);
+  const [recordLimit, setRecordLimit] = useState(100); // Increased default to 100
+  const [detectedDateCol, setDetectedDateCol] = useState(null);
+
+  /* ── Table search filter ── */
+  const [searchQuery, setSearchQuery] = useState('');
+
+  /* ── Modal preview state ── */
+  const [activeMedia, setActiveMedia] = useState(null);
 
   const esRef = useRef(null);
 
@@ -104,46 +390,53 @@ export default function LiveMonitor() {
     closeStream();
   }, [table, closeStream]);
 
-  /* ── Fetch rows without re-opening stream (used by Refresh button) ── */
-  const fetchRowsOnly = useCallback(async () => {
+  /* ── Fetch latest rows (with limit and date filters) ── */
+  const fetchRowsOnly = useCallback(async (isRefresh = false) => {
     if (!table) return;
-    setRefreshing(true);
+    if (isRefresh) setRefreshing(true);
+    else setLoading(true);
     setError('');
-    try {
-      const d = await getPgRows(table);
-      if (!d.ok) throw new Error(d.body?.error || `HTTP ${d.status}`);
-      setRows(d.body.rows || []);
-      setHasFetched(true);
-      setLastRefreshed(new Date().toLocaleTimeString());
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setRefreshing(false);
-    }
-  }, [table]);
-
-  /* ── Fetch latest 20 rows and start SSE stream ── */
-  const handleFetch = useCallback(async () => {
-    if (!table) return;
-    closeStream();
-    setLoading(true);
-    setError('');
-    setNewIds(new Set());
-    setLiveCount(0);
 
     try {
-      const d = await getPgRows(table);
+      const options = {
+        limit: recordLimit,
+      };
+
+      if (todayMode) {
+        options.datePreset = 'today';
+        const today = getTodayStr();
+        options.dateFrom = today;
+        options.dateTo = today;
+      } else {
+        if (dateFrom) options.dateFrom = dateFrom;
+        if (dateTo) options.dateTo = dateTo;
+      }
+
+      const d = await getPgRows(table, options);
       if (!d.ok) throw new Error(d.body?.error || `HTTP ${d.status}`);
+
       setRows(d.body.rows || []);
+      setDetectedDateCol(d.body.dateColumn || null);
       setHasFetched(true);
       setLastRefreshed(new Date().toLocaleTimeString());
     } catch (e) {
       setError(e.message);
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
+  }, [table, recordLimit, todayMode, dateFrom, dateTo]);
 
-    /* ── Start live stream ── */
+  /* ── Fetch & Start Live SSE Stream ── */
+  const handleFetch = useCallback(async () => {
+    if (!table) return;
+    closeStream();
+    setNewIds(new Set());
+    setLiveCount(0);
+
+    await fetchRowsOnly(false);
+
+    /* ── Open Real-Time SSE Stream ── */
     const es = new EventSource(pgStreamUrl(table));
     esRef.current = es;
 
@@ -154,8 +447,8 @@ export default function LiveMonitor() {
         const msg = JSON.parse(evt.data);
         if (msg.type === 'insert') {
           setRows((prev) => {
-            const next = [msg.row, ...prev].slice(0, 20);
-            setNewIds(new Set([0])); // index 0 is always the newest row
+            const next = [msg.row, ...prev].slice(0, recordLimit);
+            setNewIds(new Set([0])); // row 0 flashes
             setTimeout(() => setNewIds(new Set()), 2500);
             return next;
           });
@@ -171,30 +464,103 @@ export default function LiveMonitor() {
     es.onerror = () => {
       setStreaming(false);
     };
-  }, [table, closeStream]);
+  }, [table, recordLimit, closeStream, fetchRowsOnly]);
 
-  /* ── Manual Refresh ── */
+  /* ── Refresh Button ── */
   const handleRefresh = useCallback(() => {
-    fetchRowsOnly();
+    fetchRowsOnly(true);
   }, [fetchRowsOnly]);
+
+  /* ── Media Download Handler ── */
+  const handleDownloadMedia = useCallback((media) => {
+    if (!media) return;
+    const { kind, dataUri, content, path, url, filename } = media;
+
+    // 1. Data URI / Base64
+    if (dataUri) {
+      const a = document.createElement('a');
+      a.href = dataUri;
+      a.download = filename || 'attachment';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      return;
+    }
+
+    // 2. Raw HTML
+    if (kind === 'html' && content) {
+      const blob = new Blob([content], { type: 'text/html;charset=utf-8' });
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = filename || 'document.html';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(blobUrl);
+      return;
+    }
+
+    // 3. Local Server Path
+    if (kind === 'path' && path) {
+      const downloadUrl = getPgFileUrl(path, true);
+      const a = document.createElement('a');
+      a.href = downloadUrl;
+      a.download = filename || 'file';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      return;
+    }
+
+    // 4. URL
+    if (kind === 'url' && url) {
+      window.open(url, '_blank');
+    }
+  }, []);
 
   /* ── Cleanup on unmount ── */
   useEffect(() => () => closeStream(), [closeStream]);
+
+  /* ── Client-side search filtering ── */
+  const filteredRows = useMemo(() => {
+    if (!searchQuery.trim()) return rows;
+    const q = searchQuery.toLowerCase();
+    return rows.filter((r) =>
+      Object.values(r).some((val) =>
+        String(val ?? '').toLowerCase().includes(q)
+      )
+    );
+  }, [rows, searchQuery]);
 
   const busy = loading || refreshing;
 
   return (
     <div className="lm-page">
 
-      {/* Header */}
-      <div className="lm-page-header">
-        <h1 className="lm-page-title">Live Monitor</h1>
-        <p className="lm-page-subtitle">
-          Select a PostgreSQL table, fetch the latest 20 rows, and watch new inserts appear in real time.
-        </p>
+      {/* ── Page Header & Top Stats ── */}
+      <div className="lm-header-bar">
+        <div>
+          <h1 className="lm-page-title">Live Database Monitor</h1>
+          <p className="lm-page-subtitle">
+            Real-time PostgreSQL CDC monitoring, date filtering, HTML rendering & attachment downloads.
+          </p>
+        </div>
+
+        <div className="lm-stats-badges">
+          <span className={`lm-live-badge ${streaming ? 'lm-live-badge--on' : ''}`}>
+            <IconWifi />
+            {streaming ? `Live SSE · ${liveCount} new` : 'Offline'}
+          </span>
+          {hasFetched && (
+            <span className="lm-stat-pill">
+              {rows.length} records (Limit: {recordLimit})
+            </span>
+          )}
+        </div>
       </div>
 
-      {/* Error banner */}
+      {/* ── Error Banner ── */}
       {error && (
         <div className="lm-error-banner" role="alert">
           <span>{error}</span>
@@ -202,12 +568,17 @@ export default function LiveMonitor() {
         </div>
       )}
 
-      {/* Filter card */}
+      {/* ── Enhanced Control / Filter Card ── */}
       <div className="lm-card lm-filter-card">
-        <div className="lm-filter-row">
 
+        {/* Row 1: Table selection, Limit, Date Filters */}
+        <div className="lm-filter-grid">
+
+          {/* Table select */}
           <div className="lm-field">
-            <label className="lm-label" htmlFor="lm-table">Table</label>
+            <label className="lm-label" htmlFor="lm-table">
+              <IconDatabase /> Table
+            </label>
             <select
               id="lm-table"
               value={table}
@@ -222,87 +593,224 @@ export default function LiveMonitor() {
             </select>
           </div>
 
-          {/* Fetch Button */}
-          <button
-            className="lm-btn-primary"
-            onClick={handleFetch}
-            disabled={busy || !table}
-          >
-            {loading ? <span className="lm-spinner" /> : <IconRefresh />}
-            {loading ? 'Fetching…' : (hasFetched ? 'Re-fetch' : 'Fetch')}
-          </button>
-
-          {/* Refresh Button */}
-          {hasFetched && (
-            <button
-              className="lm-btn-secondary"
-              onClick={handleRefresh}
-              disabled={busy || !table}
-              title="Refresh latest 20 rows from PostgreSQL"
+          {/* Record Limit (increased to 100 default) */}
+          <div className="lm-field lm-field-limit">
+            <label className="lm-label" htmlFor="lm-limit">Records Limit</label>
+            <select
+              id="lm-limit"
+              value={recordLimit}
+              onChange={(e) => setRecordLimit(Number(e.target.value))}
+              disabled={busy}
             >
-              {refreshing ? <span className="lm-spinner" /> : <IconRefresh />}
-              {refreshing ? 'Refreshing…' : 'Refresh'}
+              <option value="50">50 rows</option>
+              <option value="100">100 rows (Default)</option>
+              <option value="200">200 rows</option>
+              <option value="500">500 rows</option>
+            </select>
+          </div>
+
+          {/* Date from */}
+          <div className="lm-field">
+            <label className="lm-label" htmlFor="lm-date-from">Date From</label>
+            <input
+              id="lm-date-from"
+              type="text"
+              inputMode="numeric"
+              placeholder="yyyy-mm-dd"
+              value={todayMode ? getTodayStr() : dateFrom}
+              onChange={(e) => { setTodayMode(false); setDateFrom(e.target.value); }}
+              disabled={busy}
+              className={todayMode ? 'lm-date-locked' : ''}
+              readOnly={todayMode}
+            />
+          </div>
+
+          {/* Date to */}
+          <div className="lm-field">
+            <label className="lm-label" htmlFor="lm-date-to">Date To</label>
+            <input
+              id="lm-date-to"
+              type="text"
+              inputMode="numeric"
+              placeholder="yyyy-mm-dd"
+              value={todayMode ? getTodayStr() : dateTo}
+              onChange={(e) => { setTodayMode(false); setDateTo(e.target.value); }}
+              disabled={busy}
+              className={todayMode ? 'lm-date-locked' : ''}
+              readOnly={todayMode}
+            />
+          </div>
+
+          {/* Quick Today Button */}
+          <div className="lm-field lm-field-action-btn">
+            <label className="lm-label">Quick Date</label>
+            <button
+              type="button"
+              className={`lm-btn-today ${todayMode ? 'lm-btn-today--active' : ''}`}
+              onClick={() => setTodayMode((prev) => !prev)}
+              disabled={busy}
+              title="Filter by Today's date"
+            >
+              {todayMode ? '📅 Today (Active)' : '📅 Today'}
             </button>
-          )}
-
-          {/* Live badge */}
-          <span className={`lm-live-badge ${streaming ? 'lm-live-badge--on' : ''}`}>
-            <IconWifi />
-            {streaming ? `Live · ${liveCount} new` : 'Offline'}
-          </span>
-        </div>
-      </div>
-
-      {/* Results card */}
-      <div className="lm-card lm-results-card">
-        <div className="lm-results-header">
-          <span className="lm-results-title">
-            <IconDatabase />
-            {hasFetched ? table : 'Results'}
-          </span>
-          <div className="lm-results-header-right">
-            {lastRefreshed && (
-              <span className="lm-refreshed-time" title="Last refreshed time">
-                Updated {lastRefreshed}
-              </span>
-            )}
-            {hasFetched && (
-              <button
-                className="lm-btn-icon-refresh"
-                onClick={handleRefresh}
-                disabled={busy}
-                title="Refresh latest rows"
-              >
-                <IconRefresh />
-                <span>Refresh</span>
-              </button>
-            )}
-            {hasFetched && (
-              <span className="lm-pill">{rows.length} row{rows.length !== 1 ? 's' : ''}</span>
-            )}
           </div>
         </div>
 
+        {/* Action Row */}
+        <div className="lm-action-bar">
+          <div className="lm-action-buttons">
+            <button
+              className="lm-btn-primary"
+              onClick={handleFetch}
+              disabled={busy || !table}
+            >
+              {loading ? <span className="lm-spinner" /> : <IconRefresh />}
+              {loading ? 'Fetching…' : (hasFetched ? 'Re-fetch Table' : 'Fetch Records')}
+            </button>
+
+            {hasFetched && (
+              <button
+                className="lm-btn-secondary"
+                onClick={handleRefresh}
+                disabled={busy || !table}
+                title="Refresh latest 100 records from PostgreSQL"
+              >
+                {refreshing ? <span className="lm-spinner" /> : <IconRefresh />}
+                {refreshing ? 'Refreshing…' : 'Refresh'}
+              </button>
+            )}
+
+            {(dateFrom || dateTo || todayMode) && (
+              <button
+                type="button"
+                className="lm-btn-text"
+                onClick={() => { setTodayMode(false); setDateFrom(''); setDateTo(''); }}
+                disabled={busy}
+              >
+                Clear Date Filter
+              </button>
+            )}
+          </div>
+
+          {detectedDateCol && (
+            <span className="lm-filter-note">
+              Filtered on column: <strong>{detectedDateCol}</strong>
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* ── Results Section ── */}
+      <div className="lm-card lm-results-card">
+
+        {/* Toolbar Header */}
+        <div className="lm-results-header">
+          <div className="lm-results-header-left">
+            <span className="lm-results-title">
+              <IconDatabase />
+              {hasFetched ? table : 'Table Records'}
+            </span>
+
+            {hasFetched && (
+              <span className="lm-pill">
+                {filteredRows.length} {filteredRows.length === 1 ? 'record' : 'records'}
+                {searchQuery && ` (matching "${searchQuery}")`}
+              </span>
+            )}
+          </div>
+
+          {hasFetched && (
+            <div className="lm-results-header-right">
+              {/* Client search */}
+              <div className="lm-search-box">
+                <IconSearch />
+                <input
+                  type="text"
+                  placeholder="Filter in results…"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                />
+                {searchQuery && (
+                  <button
+                    type="button"
+                    className="lm-search-clear"
+                    onClick={() => setSearchQuery('')}
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+
+              {/* Export Controls */}
+              {rows.length > 0 && (
+                <div className="lm-export-btns">
+                  <button
+                    type="button"
+                    className="lm-btn-export"
+                    onClick={() => exportCSV(Object.keys(rows[0]), rows, table)}
+                    title="Export as CSV"
+                  >
+                    CSV
+                  </button>
+                  <button
+                    type="button"
+                    className="lm-btn-export"
+                    onClick={() => exportJSON(rows, table)}
+                    title="Export as JSON"
+                  >
+                    JSON
+                  </button>
+                </div>
+              )}
+
+              {lastRefreshed && (
+                <span className="lm-refreshed-time" title="Last refreshed time">
+                  Updated {lastRefreshed}
+                </span>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Table Body States */}
         {!hasFetched && !loading && (
           <div className="lm-placeholder">
-            Select a table and click <strong>Fetch</strong> to begin.
+            Select a table and click <strong>Fetch Records</strong> to view up to 100 entries and stream live updates.
           </div>
         )}
 
         {loading && (
           <div className="lm-placeholder">
-            <span className="lm-spinner" /> Fetching…
+            <span className="lm-spinner" /> Loading latest records…
           </div>
         )}
 
-        {hasFetched && !loading && rows.length === 0 && (
-          <div className="lm-placeholder lm-empty">No rows in this table yet.</div>
+        {hasFetched && !loading && filteredRows.length === 0 && (
+          <div className="lm-placeholder lm-empty">
+            {searchQuery
+              ? `No records match search term "${searchQuery}".`
+              : 'No records found matching current date and filters.'}
+          </div>
         )}
 
-        {hasFetched && !loading && rows.length > 0 && (
-          <MonitorTable rows={rows} newIds={newIds} />
+        {hasFetched && !loading && filteredRows.length > 0 && (
+          <MonitorTable
+            rows={filteredRows}
+            newIds={newIds}
+            onPreview={setActiveMedia}
+            onDownload={handleDownloadMedia}
+          />
         )}
       </div>
+
+      {/* ── Interactive Preview Modal for HTML & Attachments ── */}
+      {activeMedia && (
+        <MediaModal
+          media={activeMedia}
+          onClose={() => setActiveMedia(null)}
+          onDownload={handleDownloadMedia}
+        />
+      )}
     </div>
   );
 }

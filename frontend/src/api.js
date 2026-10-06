@@ -45,8 +45,19 @@ export const eventsUrl = `${API}/api/events`;
 
 // ── PostgreSQL Live Monitor helpers (uses API variable from env) ──
 export const getPgTables = () => fetch(`${API}/api/pg/tables`).then(json);
-export const getPgRows = (table) =>
-  fetch(`${API}/api/pg/rows?table=${encodeURIComponent(table)}`).then(json);
+
+export const getPgRows = (table, options = {}) => {
+  const params = new URLSearchParams({ table });
+  if (options.limit) params.set('limit', String(options.limit));
+  if (options.dateFrom) params.set('dateFrom', options.dateFrom);
+  if (options.dateTo) params.set('dateTo', options.dateTo);
+  if (options.datePreset) params.set('datePreset', options.datePreset);
+  return fetch(`${API}/api/pg/rows?${params.toString()}`).then(json);
+};
+
+export const getPgFileUrl = (filePath, download = false) =>
+  `${API}/api/pg/file?path=${encodeURIComponent(filePath)}${download ? '&download=1' : ''}`;
+
 export const pgStreamUrl = (table) =>
   `${API}/api/pg/stream?table=${encodeURIComponent(table)}`;
 

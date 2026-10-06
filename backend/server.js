@@ -2,6 +2,8 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import pg from 'pg';
 
 // ---------------------------------------------------------------
@@ -294,8 +296,8 @@ app.get('/api/pg/tables', async (_req, res) => {
   }
 });
 
-/** Detect best column to order by so latest date/timestamp/ID rows appear first */
-async function getTableOrderClause(pool, table) {
+/** Detect best column to order by and date column for filtering */
+async function getTableMetadata(pool, table) {
   try {
     const { rows } = await pool.query(
       `SELECT column_name, data_type
@@ -304,7 +306,9 @@ async function getTableOrderClause(pool, table) {
           AND table_name   = $1`,
       [table]
     );
-    if (!rows || rows.length === 0) return 'ctid DESC';
+    if (!rows || rows.length === 0) {
+      return { orderClause: 'ctid DESC', dateColumn: null, columns: [] };
+    }
 
     const colNames = rows.map((r) => r.column_name.toLowerCase());
 
@@ -314,43 +318,146 @@ async function getTableOrderClause(pool, table) {
       'generated_date', 'date', 'statement_date', 'transaction_date',
       'inserted_at', 'timestamp', 'updated_at', 'record_date'
     ];
+    let dateCol = null;
     for (const cand of priorityDateCols) {
       const idx = colNames.indexOf(cand);
-      if (idx !== -1) return `"${rows[idx].column_name}" DESC`;
+      if (idx !== -1) {
+        dateCol = { name: rows[idx].column_name, type: rows[idx].data_type };
+        break;
+      }
     }
 
     // 2. Any column with date or timestamp in data_type
-    const dateTypeRow = rows.find((r) =>
-      r.data_type.includes('timestamp') || r.data_type === 'date'
-    );
-    if (dateTypeRow) return `"${dateTypeRow.column_name}" DESC`;
+    if (!dateCol) {
+      const dateTypeRow = rows.find((r) =>
+        r.data_type.includes('timestamp') || r.data_type === 'date'
+      );
+      if (dateTypeRow) {
+        dateCol = { name: dateTypeRow.column_name, type: dateTypeRow.data_type };
+      }
+    }
 
-    // 3. Primary key / ID column (id, *_id)
-    const idRow = rows.find((r) => r.column_name.toLowerCase() === 'id');
-    if (idRow) return `"${idRow.column_name}" DESC`;
+    // Determine order clause
+    let orderClause = 'ctid DESC';
+    if (dateCol) {
+      orderClause = `"${dateCol.name}" DESC`;
+    } else {
+      const idRow = rows.find((r) => r.column_name.toLowerCase() === 'id');
+      if (idRow) {
+        orderClause = `"${idRow.column_name}" DESC`;
+      } else {
+        const anyIdRow = rows.find((r) => r.column_name.toLowerCase().endsWith('_id'));
+        if (anyIdRow) {
+          orderClause = `"${anyIdRow.column_name}" DESC`;
+        }
+      }
+    }
 
-    const anyIdRow = rows.find((r) => r.column_name.toLowerCase().endsWith('_id'));
-    if (anyIdRow) return `"${anyIdRow.column_name}" DESC`;
-
-    return 'ctid DESC';
+    return { orderClause, dateColumn: dateCol, columns: rows };
   } catch (_) {
-    return 'ctid DESC';
+    return { orderClause: 'ctid DESC', dateColumn: null, columns: [] };
   }
 }
 
-// GET /api/pg/rows?table=xxx  – fetch latest 20 rows (ordered by latest date/id desc)
+// GET /api/pg/rows?table=xxx&limit=100&dateFrom=...&dateTo=...&datePreset=...
 app.get('/api/pg/rows', async (req, res) => {
   const table = req.query.table;
   if (!validTable(table)) return res.status(400).json({ error: 'Invalid table name' });
+
+  // Default to 100 records as requested
+  const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 500);
+  const { dateFrom, dateTo, datePreset } = req.query;
+
   try {
-    const orderClause = await getTableOrderClause(pgPool, table);
-    const { rows } = await pgPool.query(
-      `SELECT * FROM "${table}" ORDER BY ${orderClause} LIMIT 20`
-    );
-    res.json({ rows, orderClause });
+    const meta = await getTableMetadata(pgPool, table);
+    const conditions = [];
+    const params = [];
+
+    // Apply date filter if dateColumn exists and filter requested
+    if (meta.dateColumn) {
+      const col = `"${meta.dateColumn.name}"`;
+      const isDateType = meta.dateColumn.type.includes('timestamp') || meta.dateColumn.type === 'date';
+
+      let from = dateFrom;
+      let to = dateTo;
+      if (datePreset === 'today') {
+        const todayStr = new Date().toISOString().slice(0, 10);
+        from = from || todayStr;
+        to = to || todayStr;
+      }
+
+      if (from && from === to) {
+        params.push(from);
+        if (isDateType) {
+          conditions.push(`${col}::date = $${params.length}::date`);
+        } else {
+          conditions.push(`${col}::text LIKE $${params.length} || '%'`);
+        }
+      } else {
+        if (from) {
+          params.push(from);
+          if (isDateType) {
+            conditions.push(`${col}::date >= $${params.length}::date`);
+          } else {
+            conditions.push(`${col}::text >= $${params.length}`);
+          }
+        }
+        if (to) {
+          params.push(to);
+          if (isDateType) {
+            conditions.push(`${col}::date <= $${params.length}::date`);
+          } else {
+            conditions.push(`${col}::text <= $${params.length} || ' 23:59:59'`);
+          }
+        }
+      }
+    }
+
+    const whereSql = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    params.push(limit);
+    const limitPlaceholder = `$${params.length}`;
+
+    const query = `SELECT * FROM "${table}" ${whereSql} ORDER BY ${meta.orderClause} LIMIT ${limitPlaceholder}`;
+    const { rows } = await pgPool.query(query, params);
+
+    res.json({
+      rows,
+      orderClause: meta.orderClause,
+      dateColumn: meta.dateColumn?.name || null,
+      total: rows.length,
+      limit,
+    });
   } catch (err) {
     console.error('[pg/rows]', err.message);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/pg/file?path=xxx&download=1
+// Securely streams a file referenced in database attachment column
+app.get('/api/pg/file', (req, res) => {
+  const targetPath = req.query.path;
+  if (!targetPath || typeof targetPath !== 'string') {
+    return res.status(400).json({ error: 'Missing path parameter' });
+  }
+
+  try {
+    const resolved = path.resolve(targetPath);
+    if (!fs.existsSync(resolved)) {
+      return res.status(404).json({ error: 'File not found at specified path' });
+    }
+    const stat = fs.statSync(resolved);
+    if (!stat.isFile()) {
+      return res.status(400).json({ error: 'Path is not a regular file' });
+    }
+
+    const filename = path.basename(resolved);
+    const isDownload = req.query.download === '1' || req.query.download === 'true';
+
+    res.setHeader('Content-Disposition', `${isDownload ? 'attachment' : 'inline'}; filename="${filename}"`);
+    fs.createReadStream(resolved).pipe(res);
+  } catch (err) {
+    res.status(500).json({ error: `Could not access file: ${err.message}` });
   }
 });
 
