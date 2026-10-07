@@ -431,14 +431,15 @@ app.get('/api/pg/rows', async (req, res) => {
     const conditions = [];
     const params = [];
 
-    // Apply status filter if status column exists in table
+    // Apply status filter if status column exists in table (cast to text to support PostgreSQL ENUMs)
     if (status && typeof status === 'string' && status.trim()) {
       const statusCol = meta.columns.find((c) => c.column_name.toLowerCase() === 'status');
       if (statusCol) {
         params.push(status.trim());
-        conditions.push(`LOWER("${statusCol.column_name}") = LOWER($${params.length})`);
+        conditions.push(`LOWER("${statusCol.column_name}"::text) = LOWER($${params.length})`);
       }
     }
+
 
     // Apply date filter if dateColumn exists and filter requested
     if (meta.dateColumn) {
