@@ -496,7 +496,11 @@ app.get('/api/pg/rows', async (req, res) => {
       } catch (_) {}
     }
 
+    const query = `SELECT * FROM "${table}" ${whereSql} ORDER BY ${meta.orderClause} LIMIT ${limitPlaceholder}`;
+    const { rows } = await pgPool.query(query, params);
+
     res.json({
+
       rows,
       orderClause: meta.orderClause,
       dateColumn: meta.dateColumn?.name || null,
