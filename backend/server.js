@@ -620,9 +620,11 @@ app.get('/api/pg/stream', async (req, res) => {
 });
 
 app.listen(PORT, () => {
+  const sftpConfig = getSftpConfig();
   console.log(`Report backend listening on http://localhost:${PORT}`);
   console.log(`  Callback URL (for Scaler HTTP Caller): http://localhost:${PORT}/api/scaler/callback`);
   console.log(`  Scaler URL (backend calls this):       ${SCALER_URL || '(not configured)'}`);
   console.log(`  Callback secret: ${CALLBACK_SECRET ? 'enabled' : 'DISABLED (set CALLBACK_SECRET)'}`);
   console.log(`  SFTP Remote Storage: ${SFTP_ENABLED ? `ENABLED (${sftpConfig.host || 'unknown'}:${sftpConfig.port})` : 'DISABLED (using local disk fallback)'}`);
 });
+
