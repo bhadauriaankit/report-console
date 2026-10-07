@@ -424,12 +424,21 @@ app.get('/api/pg/rows', async (req, res) => {
 
   // Default to 100 records as requested
   const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 500);
-  const { dateFrom, dateTo, datePreset } = req.query;
+  const { dateFrom, dateTo, datePreset, status } = req.query;
 
   try {
     const meta = await getTableMetadata(pgPool, table);
     const conditions = [];
     const params = [];
+
+    // Apply status filter if status column exists in table
+    if (status && typeof status === 'string' && status.trim()) {
+      const statusCol = meta.columns.find((c) => c.column_name.toLowerCase() === 'status');
+      if (statusCol) {
+        params.push(status.trim());
+        conditions.push(`LOWER("${statusCol.column_name}") = LOWER($${params.length})`);
+      }
+    }
 
     // Apply date filter if dateColumn exists and filter requested
     if (meta.dateColumn) {
@@ -471,17 +480,28 @@ app.get('/api/pg/rows', async (req, res) => {
       }
     }
 
+
     const whereSql = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
     params.push(limit);
     const limitPlaceholder = `$${params.length}`;
 
-    const query = `SELECT * FROM "${table}" ${whereSql} ORDER BY ${meta.orderClause} LIMIT ${limitPlaceholder}`;
-    const { rows } = await pgPool.query(query, params);
+    const statusCol = meta.columns.find((c) => c.column_name.toLowerCase() === 'status');
+    let distinctStatuses = [];
+    if (statusCol) {
+      try {
+        const statusRes = await pgPool.query(
+          `SELECT DISTINCT "${statusCol.column_name}"::text AS val FROM "${table}" WHERE "${statusCol.column_name}" IS NOT NULL ORDER BY 1 LIMIT 50`
+        );
+        distinctStatuses = statusRes.rows.map((r) => r.val).filter(Boolean);
+      } catch (_) {}
+    }
 
     res.json({
       rows,
       orderClause: meta.orderClause,
       dateColumn: meta.dateColumn?.name || null,
+      statusColumn: statusCol?.column_name || null,
+      statuses: distinctStatuses,
       total: rows.length,
       limit,
     });

@@ -5,12 +5,12 @@ import LiveMonitor from './LiveMonitor.jsx';
 import './styles.css';
 
 const TABS = [
-  { id: 'report',  label: '📊 Report Console' },
   { id: 'monitor', label: '🟢 Live Monitor' },
+  { id: 'report',  label: '📊 Scaler Reports' },
 ];
 
 function App() {
-  const [tab, setTab] = useState('report');
+  const [tab, setTab] = useState('monitor');
 
   return (
     <>
@@ -28,11 +28,12 @@ function App() {
       </nav>
 
       {/* ── Active view ── */}
-      {tab === 'report'  && <ReportConsole />}
       {tab === 'monitor' && <LiveMonitor />}
+      {tab === 'report'  && <ReportConsole />}
     </>
   );
 }
+
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>

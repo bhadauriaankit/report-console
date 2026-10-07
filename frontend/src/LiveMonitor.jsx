@@ -376,11 +376,17 @@ export default function LiveMonitor() {
   const [dateFrom, setDateFrom]     = useState('');
   const [dateTo, setDateTo]         = useState('');
   const [todayMode, setTodayMode]   = useState(false);
-  const [recordLimit, setRecordLimit] = useState(100); // Increased default to 100
+  const [recordLimit, setRecordLimit] = useState(100); // Default to 100
   const [detectedDateCol, setDetectedDateCol] = useState(null);
+
+  /* ── Status filter state ── */
+  const [statusFilter, setStatusFilter] = useState('');
+  const [statusOptions, setStatusOptions] = useState([]);
+  const [detectedStatusCol, setDetectedStatusCol] = useState(null);
 
   /* ── Table search filter ── */
   const [searchQuery, setSearchQuery] = useState('');
+
 
   /* ── Modal preview state ── */
   const [activeMedia, setActiveMedia] = useState(null);
@@ -417,7 +423,7 @@ export default function LiveMonitor() {
     closeStream();
   }, [table, closeStream]);
 
-  /* ── Fetch latest rows (with limit and date filters) ── */
+  /* ── Fetch latest rows (with limit, status, and date filters) ── */
   const fetchRowsOnly = useCallback(async (isRefresh = false) => {
     if (!table) return;
     if (isRefresh) setRefreshing(true);
@@ -428,6 +434,10 @@ export default function LiveMonitor() {
       const options = {
         limit: recordLimit,
       };
+
+      if (statusFilter) {
+        options.status = statusFilter;
+      }
 
       if (todayMode) {
         options.datePreset = 'today';
@@ -444,6 +454,10 @@ export default function LiveMonitor() {
 
       setRows(d.body.rows || []);
       setDetectedDateCol(d.body.dateColumn || null);
+      setDetectedStatusCol(d.body.statusColumn || null);
+      if (d.body.statuses?.length) {
+        setStatusOptions(d.body.statuses);
+      }
       setHasFetched(true);
       setLastRefreshed(new Date().toLocaleTimeString());
     } catch (e) {
@@ -452,7 +466,8 @@ export default function LiveMonitor() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [table, recordLimit, todayMode, dateFrom, dateTo]);
+  }, [table, recordLimit, statusFilter, todayMode, dateFrom, dateTo]);
+
 
   /* ── Fetch & Start Live SSE Stream ── */
   const handleFetch = useCallback(async () => {
@@ -611,6 +626,8 @@ export default function LiveMonitor() {
               value={table}
               onChange={(e) => {
                 setTable(e.target.value);
+                setStatusFilter('');
+                setStatusOptions([]);
                 setHasFetched(false);
                 setRows([]);
               }}
@@ -620,7 +637,35 @@ export default function LiveMonitor() {
             </select>
           </div>
 
-          {/* Record Limit (increased to 100 default) */}
+          {/* Status Filter */}
+          <div className="lm-field">
+            <label className="lm-label" htmlFor="lm-status-filter">
+              Status Filter
+            </label>
+            <select
+              id="lm-status-filter"
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              disabled={busy}
+            >
+              <option value="">All Statuses</option>
+              {statusOptions.length > 0
+                ? statusOptions.map((s) => (
+                    <option key={s} value={s}>{s}</option>
+                  ))
+                : (
+                  <>
+                    <option value="COMPLETE">COMPLETE</option>
+                    <option value="FAILED">FAILED</option>
+                    <option value="PENDING">PENDING</option>
+                    <option value="IN_PROGRESS">IN_PROGRESS</option>
+                  </>
+                )
+              }
+            </select>
+          </div>
+
+          {/* Record Limit */}
           <div className="lm-field lm-field-limit">
             <label className="lm-label" htmlFor="lm-limit">Records Limit</label>
             <select
@@ -635,6 +680,7 @@ export default function LiveMonitor() {
               <option value="500">500 rows</option>
             </select>
           </div>
+
 
           {/* Date from */}
           <div className="lm-field">
@@ -707,25 +753,38 @@ export default function LiveMonitor() {
               </button>
             )}
 
-            {(dateFrom || dateTo || todayMode) && (
+            {(dateFrom || dateTo || todayMode || statusFilter) && (
               <button
                 type="button"
                 className="lm-btn-text"
-                onClick={() => { setTodayMode(false); setDateFrom(''); setDateTo(''); }}
+                onClick={() => {
+                  setTodayMode(false);
+                  setDateFrom('');
+                  setDateTo('');
+                  setStatusFilter('');
+                }}
                 disabled={busy}
               >
-                Clear Date Filter
+                Clear Filters
               </button>
             )}
           </div>
 
-          {detectedDateCol && (
-            <span className="lm-filter-note">
-              Filtered on column: <strong>{detectedDateCol}</strong>
-            </span>
-          )}
+          <div className="lm-filter-notes">
+            {detectedStatusCol && statusFilter && (
+              <span className="lm-filter-note">
+                Status: <strong>{statusFilter}</strong> ({detectedStatusCol})
+              </span>
+            )}
+            {detectedDateCol && (
+              <span className="lm-filter-note">
+                Date: <strong>{detectedDateCol}</strong>
+              </span>
+            )}
+          </div>
         </div>
       </div>
+
 
       {/* ── Results Section ── */}
       <div className="lm-card lm-results-card">

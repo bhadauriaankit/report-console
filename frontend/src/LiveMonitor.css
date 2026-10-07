@@ -197,6 +197,13 @@
   flex-wrap: wrap;
 }
 
+.lm-filter-notes {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .lm-filter-note {
   font-size: 12px;
   color: var(--ink-3);
@@ -209,6 +216,7 @@
 .lm-filter-note strong {
   color: var(--ink);
 }
+
 
 /* ── Buttons ── */
 .lm-btn-primary {

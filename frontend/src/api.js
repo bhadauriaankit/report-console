@@ -52,8 +52,10 @@ export const getPgRows = (table, options = {}) => {
   if (options.dateFrom) params.set('dateFrom', options.dateFrom);
   if (options.dateTo) params.set('dateTo', options.dateTo);
   if (options.datePreset) params.set('datePreset', options.datePreset);
+  if (options.status) params.set('status', options.status);
   return fetch(`${API}/api/pg/rows?${params.toString()}`).then(json);
 };
+
 
 export const getPgFileUrl = (filePath, download = false) =>
   `${API}/api/pg/file?path=${encodeURIComponent(filePath)}${download ? '&download=1' : ''}`;
