@@ -79,15 +79,19 @@ async function streamFromSftp(targetPath, res) {
   try {
     await sftp.connect(config);
 
-    // Normalize path: strip sftp:// prefix if present
+    // Normalize path: strip sftp://user@host prefix if present
     let remotePath = targetPath;
     if (remotePath.startsWith('sftp://')) {
-      remotePath = remotePath.replace(/^sftp:\/\/[^/]*\/?/, '/');
+      remotePath = remotePath.replace(/^sftp:\/\/[^/]+\/?/, '');
     }
-    // Prepend base path if configured and relative
-    if (process.env.SFTP_BASE_PATH && !remotePath.startsWith(process.env.SFTP_BASE_PATH)) {
-      remotePath = path.posix.join(process.env.SFTP_BASE_PATH, remotePath);
+    // Prepend base path if configured and path does not already include it
+    if (process.env.SFTP_BASE_PATH) {
+      const basePath = process.env.SFTP_BASE_PATH.replace(/\/+$/, '');
+      if (!remotePath.startsWith(basePath)) {
+        remotePath = `${basePath}/${remotePath.replace(/^\/+/, '')}`;
+      }
     }
+
 
     const fileType = await sftp.exists(remotePath);
     if (!fileType) {
