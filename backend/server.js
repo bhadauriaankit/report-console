@@ -5,6 +5,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import pg from 'pg';
+import SftpClient from 'ssh2-sftp-client';
 
 // ---------------------------------------------------------------
 // PostgreSQL pool & configuration (strictly from environment variables)
@@ -46,6 +47,59 @@ const SCALER_AUTH = process.env.SCALER_AUTH;
 const csv = (v) => (v || '').split(',').map((s) => s.trim()).filter(Boolean);
 const REPORT_TYPES = csv(process.env.REPORT_TYPES);
 const REPORT_STATUSES = csv(process.env.REPORT_STATUSES);
+
+// ---------------------------------------------------------------
+// SFTP Configuration & Helpers (for remote file storage)
+// ---------------------------------------------------------------
+const SFTP_ENABLED = process.env.SFTP_ENABLED === 'true';
+
+function getSftpConfig() {
+  const config = {
+    host:     process.env.SFTP_HOST,
+    port:     Number(process.env.SFTP_PORT || 22),
+    username: process.env.SFTP_USER,
+  };
+  if (process.env.SFTP_PASSWORD) {
+    config.password = process.env.SFTP_PASSWORD;
+  }
+  if (process.env.SFTP_KEY_PATH && fs.existsSync(process.env.SFTP_KEY_PATH)) {
+    config.privateKey = fs.readFileSync(process.env.SFTP_KEY_PATH);
+  }
+  return config;
+}
+
+/** Streams a file directly from the SFTP server to Express response */
+async function streamFromSftp(targetPath, res) {
+  const config = getSftpConfig();
+  if (!config.host || !config.username) {
+    throw new Error('SFTP_HOST and SFTP_USER must be set in backend/.env to use SFTP');
+  }
+
+  const sftp = new SftpClient();
+  try {
+    await sftp.connect(config);
+
+    // Normalize path: strip sftp:// prefix if present
+    let remotePath = targetPath;
+    if (remotePath.startsWith('sftp://')) {
+      remotePath = remotePath.replace(/^sftp:\/\/[^/]*\/?/, '/');
+    }
+    // Prepend base path if configured and relative
+    if (process.env.SFTP_BASE_PATH && !remotePath.startsWith(process.env.SFTP_BASE_PATH)) {
+      remotePath = path.posix.join(process.env.SFTP_BASE_PATH, remotePath);
+    }
+
+    const fileType = await sftp.exists(remotePath);
+    if (!fileType) {
+      throw new Error(`File not found on SFTP server at: ${remotePath}`);
+    }
+
+    // Pipe remote stream directly into response
+    await sftp.get(remotePath, res);
+  } finally {
+    try { await sftp.end(); } catch (_) {}
+  }
+}
 
 // ---------------------------------------------------------------
 // In-memory state
@@ -434,50 +488,69 @@ app.get('/api/pg/rows', async (req, res) => {
 });
 
 // GET /api/pg/file?path=xxx&download=1
-// Securely streams a file referenced in database attachment column
-app.get('/api/pg/file', (req, res) => {
+// Securely streams a file referenced in database attachment column (supports SFTP & local disk)
+app.get('/api/pg/file', async (req, res) => {
   const targetPath = req.query.path;
   if (!targetPath || typeof targetPath !== 'string') {
     return res.status(400).json({ error: 'Missing path parameter' });
   }
 
-  try {
-    const resolved = path.resolve(targetPath);
-    if (!fs.existsSync(resolved)) {
-      return res.status(404).json({ error: 'File not found at specified path' });
-    }
-    const stat = fs.statSync(resolved);
-    if (!stat.isFile()) {
-      return res.status(400).json({ error: 'Path is not a regular file' });
-    }
+  const isDownload = req.query.download === '1' || req.query.download === 'true';
+  const cleanPath = targetPath.replace(/^sftp:\/\/[^/]*\/?/, '');
+  const filename = path.basename(cleanPath);
 
-    const filename = path.basename(resolved);
-    const isDownload = req.query.download === '1' || req.query.download === 'true';
-
-    const ext = path.extname(filename).toLowerCase();
-    const mimeTypes = {
-      '.html': 'text/html; charset=utf-8',
-      '.htm': 'text/html; charset=utf-8',
-      '.pdf': 'application/pdf',
-      '.png': 'image/png',
-      '.jpg': 'image/jpeg',
-      '.jpeg': 'image/jpeg',
-      '.gif': 'image/gif',
-      '.webp': 'image/webp',
-      '.svg': 'image/svg+xml',
-      '.txt': 'text/plain; charset=utf-8',
-      '.json': 'application/json; charset=utf-8',
-      '.csv': 'text/csv; charset=utf-8',
-    };
-    if (mimeTypes[ext]) {
-      res.setHeader('Content-Type', mimeTypes[ext]);
-    }
-
-    res.setHeader('Content-Disposition', `${isDownload ? 'attachment' : 'inline'}; filename="${filename}"`);
-    fs.createReadStream(resolved).pipe(res);
-  } catch (err) {
-    res.status(500).json({ error: `Could not access file: ${err.message}` });
+  const ext = path.extname(filename).toLowerCase();
+  const mimeTypes = {
+    '.html': 'text/html; charset=utf-8',
+    '.htm':  'text/html; charset=utf-8',
+    '.pdf':  'application/pdf',
+    '.png':  'image/png',
+    '.jpg':  'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.gif':  'image/gif',
+    '.webp': 'image/webp',
+    '.svg':  'image/svg+xml',
+    '.txt':  'text/plain; charset=utf-8',
+    '.json': 'application/json; charset=utf-8',
+    '.csv':  'text/csv; charset=utf-8',
+  };
+  if (mimeTypes[ext]) {
+    res.setHeader('Content-Type', mimeTypes[ext]);
   }
+  res.setHeader('Content-Disposition', `${isDownload ? 'attachment' : 'inline'}; filename="${filename}"`);
+
+  // 1. Check if path explicitly starts with sftp:// or SFTP_ENABLED is true and not found locally
+  const isExplicitSftp = targetPath.startsWith('sftp://');
+  const resolvedLocal = path.resolve(targetPath);
+  let existsLocal = false;
+  try {
+    existsLocal = !isExplicitSftp && fs.existsSync(resolvedLocal) && fs.statSync(resolvedLocal).isFile();
+  } catch (_) {
+    existsLocal = false;
+  }
+
+  if (isExplicitSftp || (SFTP_ENABLED && !existsLocal)) {
+    try {
+      await streamFromSftp(targetPath, res);
+      return;
+    } catch (sftpErr) {
+      console.error('[pg/file/sftp]', sftpErr.message);
+      if (!res.headersSent) {
+        return res.status(502).json({ error: `SFTP storage error: ${sftpErr.message}` });
+      }
+      return;
+    }
+  }
+
+  // 2. Stream from local disk if exists
+  if (existsLocal) {
+    fs.createReadStream(resolvedLocal).pipe(res);
+    return;
+  }
+
+  return res.status(404).json({
+    error: `File not found on local disk. (SFTP is ${SFTP_ENABLED ? 'enabled but file not found on remote server' : 'disabled - set SFTP_ENABLED=true in backend/.env'})`,
+  });
 });
 
 // GET /api/pg/stream?table=xxx  – SSE stream of new inserts via LISTEN/NOTIFY
@@ -549,6 +622,7 @@ app.get('/api/pg/stream', async (req, res) => {
 app.listen(PORT, () => {
   console.log(`Report backend listening on http://localhost:${PORT}`);
   console.log(`  Callback URL (for Scaler HTTP Caller): http://localhost:${PORT}/api/scaler/callback`);
-  console.log(`  Scaler URL (backend calls this):       ${SCALER_URL}`);
+  console.log(`  Scaler URL (backend calls this):       ${SCALER_URL || '(not configured)'}`);
   console.log(`  Callback secret: ${CALLBACK_SECRET ? 'enabled' : 'DISABLED (set CALLBACK_SECRET)'}`);
+  console.log(`  SFTP Remote Storage: ${SFTP_ENABLED ? `ENABLED (${sftpConfig.host || 'unknown'}:${sftpConfig.port})` : 'DISABLED (using local disk fallback)'}`);
 });
