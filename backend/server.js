@@ -8,13 +8,67 @@ import pg from 'pg';
 import SftpClient from 'ssh2-sftp-client';
 import session from 'express-session';
 import * as msal from '@azure/msal-node';
-import { createRequire } from 'node:module';
-const require = createRequire(import.meta.url);
-const { generateSecret, generateURI, verifySync } = require('otplib');
-
 import QRCode from 'qrcode';
 import nodemailer from 'nodemailer';
 import bcrypt from 'bcryptjs';
+
+// ---------------------------------------------------------------
+// Zero-Dependency Native TOTP Engine (RFC 6238 & RFC 4648)
+// 100% reliable across all Node.js and OS versions
+// ---------------------------------------------------------------
+const BASE32_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+
+function generateBase32Secret(length = 20) {
+  const bytes = crypto.randomBytes(length);
+  let secret = '';
+  for (let i = 0; i < bytes.length; i++) {
+    secret += BASE32_ALPHABET[bytes[i] % 32];
+  }
+  return secret;
+}
+
+function base32Decode(base32) {
+  const clean = String(base32).toUpperCase().replace(/=+$/, '');
+  let bits = '';
+  for (let i = 0; i < clean.length; i++) {
+    const val = BASE32_ALPHABET.indexOf(clean[i]);
+    if (val === -1) continue;
+    bits += val.toString(2).padStart(5, '0');
+  }
+  const bytes = [];
+  for (let i = 0; i + 8 <= bits.length; i += 8) {
+    bytes.push(parseInt(bits.slice(i, i + 8), 2));
+  }
+  return Buffer.from(bytes);
+}
+
+function generateTOTP(secret, timeStepSec = 30, digits = 6, offset = 0) {
+  const counter = Math.floor(Date.now() / 1000 / timeStepSec) + offset;
+  const counterBuf = Buffer.alloc(8);
+  counterBuf.writeBigInt64BE(BigInt(counter));
+
+  const key = base32Decode(secret);
+  const hmac = crypto.createHmac('sha1', key).update(counterBuf).digest();
+
+  const codeOffset = hmac[hmac.length - 1] & 0x0f;
+  const binary =
+    ((hmac[codeOffset] & 0x7f) << 24) |
+    ((hmac[codeOffset + 1] & 0xff) << 16) |
+    ((hmac[codeOffset + 2] & 0xff) << 8) |
+    (hmac[codeOffset + 3] & 0xff);
+
+  const otp = binary % Math.pow(10, digits);
+  return otp.toString().padStart(digits, '0');
+}
+
+function verifyTOTP(token, secret, window = 1) {
+  const cleanToken = String(token).trim();
+  for (let i = -window; i <= window; i++) {
+    if (generateTOTP(secret, 30, 6, i) === cleanToken) return true;
+  }
+  return false;
+}
+
 
 
 
@@ -423,14 +477,11 @@ app.get('/api/auth/2fa/setup', async (req, res) => {
   const pending = req.session?.pending2fa;
   if (!pending) return res.status(401).json({ error: 'Session expired or not in 2FA mode' });
 
-  const secret = generateSecret();
+  const secret = generateBase32Secret();
   req.session.pending2fa.tempSecret = secret;
 
-  const otpauth = generateURI({
-    label: pending.username,
-    issuer: 'ReportPortal',
-    secret,
-  });
+  // Standard otpauth:// URI supported by all Authenticator apps
+  const otpauth = `otpauth://totp/ReportPortal:${encodeURIComponent(pending.username)}?secret=${secret}&issuer=ReportPortal&digits=6&period=30`;
 
   try {
     const qrCodeDataUrl = await QRCode.toDataURL(otpauth);
@@ -439,6 +490,7 @@ app.get('/api/auth/2fa/setup', async (req, res) => {
       qrCode: qrCodeDataUrl,
     });
   } catch (err) {
+    console.error('[2fa/setup QR error]', err.message);
     res.status(500).json({ error: 'Failed to generate QR code' });
   }
 });
@@ -456,10 +508,11 @@ app.post('/api/auth/2fa/verify-totp', express.json(), async (req, res) => {
     return res.status(400).json({ error: 'Authenticator has not been set up. Please set up first.' });
   }
 
-  const check = verifySync({ token: String(token).trim(), secret: secretToVerify });
-  if (!check || !check.valid) {
+  const isValid = verifyTOTP(token, secretToVerify);
+  if (!isValid) {
     return res.status(400).json({ error: 'Invalid authenticator code. Codes refresh every 30 seconds.' });
   }
+
 
 
   // If this was a setup verification, save secret and set totp_enabled = true in DB
