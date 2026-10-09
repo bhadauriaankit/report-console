@@ -114,13 +114,13 @@ export default function LoginPage({ onLogin }) {
       setMaskedEmail(res.body.maskedEmail || '');
       setTotpEnabled(false); // Brand new user, needs setup
       setTwoFaMethod('totp'); // Start directly with QR code setup!
-    } catch {
-      setError('Cannot reach backend. Ensure backend is running on port 4000.');
+    } catch (e) {
+      console.error('[Register error]', e);
+      setError(e.message || 'Cannot reach backend. Ensure backend is running on port 4000.');
     } finally {
       setLoading(false);
     }
   };
-
 
   /* ─────────────────────────────────────────────────────────────
      Handle TOTP Setup (QR code fetching)
@@ -135,12 +135,14 @@ export default function LoginPage({ onLogin }) {
       } else {
         setError(res.body?.error || 'Failed to load QR code setup.');
       }
-    } catch {
-      setError('Cannot load 2FA setup from server.');
+    } catch (e) {
+      console.error('[2FA setup error]', e);
+      setError(e.message || 'Cannot load 2FA setup from server.');
     } finally {
       setSetupLoading(false);
     }
   };
+
 
   /* ─────────────────────────────────────────────────────────────
      Handle TOTP Verification

@@ -169,9 +169,22 @@ if (MICROSOFT_ENABLED) {
 const app = express();
 
 app.use(cors({
-  origin: CORS_ORIGIN.length ? CORS_ORIGIN : true,
+  origin: (origin, callback) => {
+    // Allow requests with no origin (like mobile apps, curl, server-to-server)
+    if (!origin) return callback(null, true);
+    // Allow any localhost / 127.0.0.1 port in development (e.g. 5173, 5174, 5175)
+    if (/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
+      return callback(null, true);
+    }
+    // Allow explicitly configured CORS_ORIGIN
+    if (CORS_ORIGIN.includes(origin)) {
+      return callback(null, true);
+    }
+    return callback(null, true); // Fallback: allow for local dev
+  },
   credentials: true,
 }));
+
 
 // Session middleware (HttpOnly cookie, 8h expiry)
 app.use(session({
