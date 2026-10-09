@@ -8,6 +8,10 @@ import pg from 'pg';
 import SftpClient from 'ssh2-sftp-client';
 import session from 'express-session';
 import * as msal from '@azure/msal-node';
+import { authenticator } from 'otplib';
+import QRCode from 'qrcode';
+import nodemailer from 'nodemailer';
+import bcrypt from 'bcryptjs';
 
 
 // ---------------------------------------------------------------
@@ -204,6 +208,61 @@ app.use(requireAuth);
 app.get('/health', (_req, res) => res.json({ ok: true, viewers: sseClients.size }));
 
 // ---------------------------------------------------------------
+// 2FA & SMTP Email Configuration
+// ---------------------------------------------------------------
+const SMTP_HOST = process.env.SMTP_HOST || '';
+const SMTP_PORT = Number(process.env.SMTP_PORT || 587);
+const SMTP_USER = process.env.SMTP_USER || '';
+const SMTP_PASS = process.env.SMTP_PASS || '';
+const SMTP_FROM = process.env.SMTP_FROM || `"Report Portal" <${SMTP_USER || 'no-reply@reportportal.local'}>`;
+const SMTP_ENABLED = !!(SMTP_HOST && SMTP_USER && SMTP_PASS);
+
+let mailTransporter = null;
+if (SMTP_ENABLED) {
+  mailTransporter = nodemailer.createTransporter({
+    host: SMTP_HOST,
+    port: SMTP_PORT,
+    secure: SMTP_PORT === 465,
+    auth: { user: SMTP_USER, pass: SMTP_PASS },
+  });
+}
+
+// In-memory Email OTP store (email -> { code, expiresAt, userPayload })
+const emailOtpStore = new Map();
+
+// Helper: Auto-create portal_users table if not exists and seed default demo user
+async function initAuthDb() {
+  try {
+    await pgPool.query(`
+      CREATE TABLE IF NOT EXISTS public.portal_users (
+        id SERIAL PRIMARY KEY,
+        username VARCHAR(100) UNIQUE NOT NULL,
+        email VARCHAR(255) UNIQUE NOT NULL,
+        password_hash VARCHAR(255) NOT NULL,
+        role VARCHAR(50) DEFAULT 'user',
+        totp_secret VARCHAR(100),
+        totp_enabled BOOLEAN DEFAULT FALSE,
+        created_at TIMESTAMP DEFAULT NOW()
+      );
+    `);
+
+    // Check if demo user exists; if not, create one: 'demo_user' / 'Demo@1234'
+    const { rows } = await pgPool.query(`SELECT id FROM public.portal_users WHERE username = 'demo_user' LIMIT 1`);
+    if (rows.length === 0) {
+      const demoHash = await bcrypt.hash('Demo@1234', 10);
+      await pgPool.query(`
+        INSERT INTO public.portal_users (username, email, password_hash, role)
+        VALUES ('demo_user', 'demo@company.com', $1, 'user');
+      `, [demoHash]);
+      console.log('  [Auth DB] Initialized demo user: demo_user / Demo@1234');
+    }
+  } catch (err) {
+    console.error('  [Auth DB error]', err.message);
+  }
+}
+initAuthDb();
+
+// ---------------------------------------------------------------
 // Auth Endpoints
 // ---------------------------------------------------------------
 
@@ -213,64 +272,210 @@ app.get('/api/auth/me', (req, res) => {
   res.json({ user: req.session.user });
 });
 
-// POST /api/auth/login — Admin username/password login
-app.post('/api/auth/login', express.json(), (req, res) => {
+// POST /api/auth/login — First step: verify username + password
+// If Admin -> logs in immediately
+// If Regular user -> enters 2FA state (returns 2FA required response)
+app.post('/api/auth/login', express.json(), async (req, res) => {
   const { username, password } = req.body || {};
   if (!username || !password) return res.status(400).json({ error: 'Username and password required' });
 
+  // 1. Check if Admin master login
   if (username === ADMIN_USER && password === ADMIN_PASSWORD) {
     req.session.user = { name: 'Administrator', email: username, role: 'admin' };
     return res.json({ ok: true, user: req.session.user });
   }
-  return res.status(401).json({ error: 'Invalid username or password' });
-});
 
-// GET /api/auth/microsoft — initiate Microsoft OAuth flow
-app.get('/api/auth/microsoft', async (req, res) => {
-  if (!MICROSOFT_ENABLED) {
-    return res.status(503).json({ error: 'Microsoft login is not configured. Set AZURE_CLIENT_ID and AZURE_CLIENT_SECRET in backend/.env' });
-  }
+  // 2. Check portal_users table in PostgreSQL
   try {
-    const url = await msalClient.getAuthCodeUrl({
-      scopes: ['openid', 'profile', 'email', 'User.Read'],
-      redirectUri: AZURE_REDIRECT_URI,
-    });
-    res.redirect(url);
-  } catch (e) {
-    console.error('[auth/microsoft]', e.message);
-    res.status(500).json({ error: 'Failed to generate Microsoft login URL' });
-  }
-});
+    const { rows } = await pgPool.query(
+      `SELECT * FROM public.portal_users WHERE LOWER(username) = LOWER($1) OR LOWER(email) = LOWER($1) LIMIT 1`,
+      [username.trim()]
+    );
 
-// GET /api/auth/callback — Microsoft OAuth callback
-app.get('/api/auth/callback', async (req, res) => {
-  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5175';
-  if (!MICROSOFT_ENABLED) return res.redirect(`${frontendUrl}/login?error=microsoft_disabled`);
+    if (rows.length === 0) {
+      return res.status(401).json({ error: 'Invalid username or password' });
+    }
 
-  const { code, error } = req.query;
-  if (error || !code) {
-    console.error('[auth/callback] Microsoft error:', error);
-    return res.redirect(`${frontendUrl}/login?error=${encodeURIComponent(error || 'no_code')}`);
-  }
+    const dbUser = rows[0];
+    const match = await bcrypt.compare(password, dbUser.password_hash);
+    if (!match) {
+      return res.status(401).json({ error: 'Invalid username or password' });
+    }
 
-  try {
-    const tokenResponse = await msalClient.acquireTokenByCode({
-      code,
-      scopes: ['openid', 'profile', 'email', 'User.Read'],
-      redirectUri: AZURE_REDIRECT_URI,
-    });
-
-    const { name, username } = tokenResponse.account;
-    req.session.user = {
-      name: name || username,
-      email: username,
-      role: 'user',
+    // Password valid! Store temporary 2FA pending state in session
+    req.session.pending2fa = {
+      id: dbUser.id,
+      username: dbUser.username,
+      email: dbUser.email,
+      role: dbUser.role || 'user',
+      totp_enabled: dbUser.totp_enabled,
+      totp_secret: dbUser.totp_secret,
     };
-    res.redirect(`${frontendUrl}/`);
-  } catch (e) {
-    console.error('[auth/callback]', e.message);
-    res.redirect(`${frontendUrl}/login?error=${encodeURIComponent(e.message)}`);
+
+    // Mask email for privacy (e.g. d***@company.com)
+    const emailParts = dbUser.email.split('@');
+    const maskedEmail = `${emailParts[0].slice(0, 1)}***@${emailParts[1] || ''}`;
+
+    return res.json({
+      ok: true,
+      requires2fa: true,
+      maskedEmail,
+      totpEnabled: dbUser.totp_enabled,
+      username: dbUser.username,
+    });
+  } catch (err) {
+    console.error('[auth/login]', err.message);
+    return res.status(500).json({ error: 'Database authentication error' });
   }
+});
+
+// GET /api/auth/2fa/setup — Generate new TOTP QR code for user
+app.get('/api/auth/2fa/setup', async (req, res) => {
+  const pending = req.session?.pending2fa;
+  if (!pending) return res.status(401).json({ error: 'Session expired or not in 2FA mode' });
+
+  const secret = authenticator.generateSecret();
+  req.session.pending2fa.tempSecret = secret;
+
+  const otpauth = authenticator.keyuri(pending.username, 'ReportPortal', secret);
+  try {
+    const qrCodeDataUrl = await QRCode.toDataURL(otpauth);
+    res.json({
+      secret,
+      qrCode: qrCodeDataUrl,
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to generate QR code' });
+  }
+});
+
+// POST /api/auth/2fa/verify-totp — Verify 6-digit Authenticator code
+app.post('/api/auth/2fa/verify-totp', express.json(), async (req, res) => {
+  const pending = req.session?.pending2fa;
+  if (!pending) return res.status(401).json({ error: 'Session expired or not in 2FA mode' });
+
+  const { token, isSetup } = req.body || {};
+  if (!token) return res.status(400).json({ error: '6-digit code required' });
+
+  const secretToVerify = isSetup ? pending.tempSecret : pending.totp_secret;
+  if (!secretToVerify) {
+    return res.status(400).json({ error: 'Authenticator has not been set up. Please set up first.' });
+  }
+
+  const isValid = authenticator.verify({ token: token.trim(), secret: secretToVerify });
+  if (!isValid) {
+    return res.status(400).json({ error: 'Invalid authenticator code. Codes refresh every 30 seconds.' });
+  }
+
+  // If this was a setup verification, save secret and set totp_enabled = true in DB
+  if (isSetup) {
+    try {
+      await pgPool.query(
+        `UPDATE public.portal_users SET totp_secret = $1, totp_enabled = TRUE WHERE id = $2`,
+        [secretToVerify, pending.id]
+      );
+    } catch (dbErr) {
+      console.error('[auth/2fa/setup save]', dbErr.message);
+    }
+  }
+
+  // 2FA Verified! Promote to full session
+  req.session.user = {
+    name: pending.username,
+    email: pending.email,
+    role: pending.role,
+  };
+  delete req.session.pending2fa;
+
+  res.json({ ok: true, user: req.session.user });
+});
+
+// POST /api/auth/2fa/send-email-otp — Generate and send 6-digit code to user email
+app.post('/api/auth/2fa/send-email-otp', async (req, res) => {
+  const pending = req.session?.pending2fa;
+  if (!pending) return res.status(401).json({ error: 'Session expired or not in 2FA mode' });
+
+  // Generate 6-digit random code
+  const code = String(Math.floor(100000 + Math.random() * 900000));
+  const expiresAt = Date.now() + 5 * 60 * 1000; // 5 minutes validity
+
+  emailOtpStore.set(pending.email.toLowerCase(), { code, expiresAt });
+
+  console.log(`\n======================================================`);
+  console.log(`🔐 [EMAIL 2FA OTP] For: ${pending.email}`);
+  console.log(`   Verification Code: ${code} (Expires in 5 minutes)`);
+  console.log(`======================================================\n`);
+
+  if (SMTP_ENABLED && mailTransporter) {
+    try {
+      await mailTransporter.sendMail({
+        from: SMTP_FROM,
+        to: pending.email,
+        subject: `Your Login Verification Code: ${code}`,
+        html: `
+          <div style="font-family:sans-serif;padding:24px;background:#f9fafb;border-radius:12px;">
+            <h2 style="color:#111827;margin-top:0;">Report Portal Login Verification</h2>
+            <p style="color:#4b5563;font-size:15px;">Use the following 6-digit code to complete your login:</p>
+            <div style="font-size:32px;font-weight:bold;letter-spacing:6px;color:#2563eb;padding:16px 0;">
+              ${code}
+            </div>
+            <p style="color:#6b7280;font-size:13px;">This code will expire in 5 minutes. If you did not attempt to log in, please ignore this email.</p>
+          </div>
+        `,
+      });
+      return res.json({ ok: true, sent: true, message: `Verification code sent to your email` });
+    } catch (mailErr) {
+      console.error('[email otp send error]', mailErr.message);
+      // Still allow testing via console print
+      return res.json({
+        ok: true,
+        sent: false,
+        message: `SMTP not configured or error. Check backend terminal for the OTP code.`,
+      });
+    }
+  } else {
+    // Local / Dev mode: code printed to console
+    return res.json({
+      ok: true,
+      sent: false,
+      devNotice: true,
+      message: `Code generated! (Check backend terminal for OTP code: ${code})`,
+    });
+  }
+});
+
+// POST /api/auth/2fa/verify-email-otp — Verify email 6-digit OTP code
+app.post('/api/auth/2fa/verify-email-otp', express.json(), (req, res) => {
+  const pending = req.session?.pending2fa;
+  if (!pending) return res.status(401).json({ error: 'Session expired or not in 2FA mode' });
+
+  const { code } = req.body || {};
+  if (!code) return res.status(400).json({ error: '6-digit code required' });
+
+  const record = emailOtpStore.get(pending.email.toLowerCase());
+  if (!record) {
+    return res.status(400).json({ error: 'No OTP requested or code expired. Please request a new code.' });
+  }
+
+  if (Date.now() > record.expiresAt) {
+    emailOtpStore.delete(pending.email.toLowerCase());
+    return res.status(400).json({ error: 'Code expired. Please request a new one.' });
+  }
+
+  if (record.code !== String(code).trim()) {
+    return res.status(400).json({ error: 'Incorrect verification code. Please check and try again.' });
+  }
+
+  // Success: Clear code and promote to full session
+  emailOtpStore.delete(pending.email.toLowerCase());
+  req.session.user = {
+    name: pending.username,
+    email: pending.email,
+    role: pending.role,
+  };
+  delete req.session.pending2fa;
+
+  res.json({ ok: true, user: req.session.user });
 });
 
 // POST /api/auth/logout — destroy session
@@ -280,6 +485,7 @@ app.post('/api/auth/logout', (req, res) => {
     res.json({ ok: true });
   });
 });
+
 
 
 

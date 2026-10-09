@@ -60,7 +60,7 @@ export const pgStreamUrl = (table) =>
 export const getMe = () =>
   fetch(`${API}/api/auth/me`, { credentials: 'include' }).then(json);
 
-export const loginAdmin = (username, password) =>
+export const loginUser = (username, password) =>
   fetch(`${API}/api/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -68,9 +68,35 @@ export const loginAdmin = (username, password) =>
     body: JSON.stringify({ username, password }),
   }).then(json);
 
+export const loginAdmin = loginUser; // Backward compatibility alias
+
+export const get2faSetup = () =>
+  fetch(`${API}/api/auth/2fa/setup`, { credentials: 'include' }).then(json);
+
+export const verifyTotp = (token, isSetup = false) =>
+  fetch(`${API}/api/auth/2fa/verify-totp`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ token, isSetup }),
+  }).then(json);
+
+export const sendEmailOtp = () =>
+  fetch(`${API}/api/auth/2fa/send-email-otp`, {
+    method: 'POST',
+    credentials: 'include',
+  }).then(json);
+
+export const verifyEmailOtp = (code) =>
+  fetch(`${API}/api/auth/2fa/verify-email-otp`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ code }),
+  }).then(json);
+
 export const logout = () =>
   fetch(`${API}/api/auth/logout`, { method: 'POST', credentials: 'include' }).then(json);
 
-export const microsoftLoginUrl = `${API}/api/auth/microsoft`;
 
 
