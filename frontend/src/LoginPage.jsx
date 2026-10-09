@@ -1,11 +1,13 @@
 import { useState, useEffect } from 'react';
 import {
   loginUser,
+  registerUser,
   get2faSetup,
   verifyTotp,
   sendEmailOtp,
   verifyEmailOtp,
 } from './api.js';
+
 
 /* ── Lock Icon ── */
 const LockIcon = () => (
