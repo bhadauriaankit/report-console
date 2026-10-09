@@ -8,7 +8,8 @@ import pg from 'pg';
 import SftpClient from 'ssh2-sftp-client';
 import session from 'express-session';
 import * as msal from '@azure/msal-node';
-import { authenticator } from 'otplib';
+import { generateSecret, generateURI, verifySync } from 'otplib';
+
 import QRCode from 'qrcode';
 import nodemailer from 'nodemailer';
 import bcrypt from 'bcryptjs';
@@ -419,10 +420,15 @@ app.get('/api/auth/2fa/setup', async (req, res) => {
   const pending = req.session?.pending2fa;
   if (!pending) return res.status(401).json({ error: 'Session expired or not in 2FA mode' });
 
-  const secret = authenticator.generateSecret();
+  const secret = generateSecret();
   req.session.pending2fa.tempSecret = secret;
 
-  const otpauth = authenticator.keyuri(pending.username, 'ReportPortal', secret);
+  const otpauth = generateURI({
+    label: pending.username,
+    issuer: 'ReportPortal',
+    secret,
+  });
+
   try {
     const qrCodeDataUrl = await QRCode.toDataURL(otpauth);
     res.json({
@@ -447,10 +453,11 @@ app.post('/api/auth/2fa/verify-totp', express.json(), async (req, res) => {
     return res.status(400).json({ error: 'Authenticator has not been set up. Please set up first.' });
   }
 
-  const isValid = authenticator.verify({ token: token.trim(), secret: secretToVerify });
-  if (!isValid) {
+  const check = verifySync({ token: String(token).trim(), secret: secretToVerify });
+  if (!check || !check.valid) {
     return res.status(400).json({ error: 'Invalid authenticator code. Codes refresh every 30 seconds.' });
   }
+
 
   // If this was a setup verification, save secret and set totp_enabled = true in DB
   if (isSetup) {
