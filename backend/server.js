@@ -8,11 +8,14 @@ import pg from 'pg';
 import SftpClient from 'ssh2-sftp-client';
 import session from 'express-session';
 import * as msal from '@azure/msal-node';
-import { generateSecret, generateURI, verifySync } from 'otplib';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
+const { generateSecret, generateURI, verifySync } = require('otplib');
 
 import QRCode from 'qrcode';
 import nodemailer from 'nodemailer';
 import bcrypt from 'bcryptjs';
+
 
 
 // ---------------------------------------------------------------
