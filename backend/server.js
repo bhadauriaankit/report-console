@@ -305,13 +305,14 @@ const SMTP_ENABLED = !!(SMTP_HOST && SMTP_USER && SMTP_PASS);
 
 let mailTransporter = null;
 if (SMTP_ENABLED) {
-  mailTransporter = nodemailer.createTransporter({
+  mailTransporter = nodemailer.createTransport({
     host: SMTP_HOST,
     port: SMTP_PORT,
     secure: SMTP_PORT === 465,
     auth: { user: SMTP_USER, pass: SMTP_PASS },
   });
 }
+
 
 // In-memory Email OTP store (email -> { code, expiresAt, userPayload })
 const emailOtpStore = new Map();
