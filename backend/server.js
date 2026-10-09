@@ -18,29 +18,44 @@ import bcrypt from 'bcryptjs';
 // ---------------------------------------------------------------
 const BASE32_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
 
-function generateBase32Secret(length = 20) {
-  const bytes = crypto.randomBytes(length);
-  let secret = '';
-  for (let i = 0; i < bytes.length; i++) {
-    secret += BASE32_ALPHABET[bytes[i] % 32];
+function generateBase32Secret(byteLength = 20) {
+  // 20 bytes = 160 bits (standard for Google/Microsoft Authenticator, exact 32 base32 chars)
+  const buffer = crypto.randomBytes(byteLength);
+  let bits = 0;
+  let value = 0;
+  let output = '';
+  for (let i = 0; i < buffer.length; i++) {
+    value = (value << 8) | buffer[i];
+    bits += 8;
+    while (bits >= 5) {
+      output += BASE32_ALPHABET[(value >>> (bits - 5)) & 31];
+      bits -= 5;
+    }
   }
-  return secret;
+  if (bits > 0) {
+    output += BASE32_ALPHABET[(value << (5 - bits)) & 31];
+  }
+  return output;
 }
 
 function base32Decode(base32) {
   const clean = String(base32).toUpperCase().replace(/=+$/, '');
-  let bits = '';
+  let bits = 0;
+  let value = 0;
+  const bytes = [];
   for (let i = 0; i < clean.length; i++) {
     const val = BASE32_ALPHABET.indexOf(clean[i]);
     if (val === -1) continue;
-    bits += val.toString(2).padStart(5, '0');
-  }
-  const bytes = [];
-  for (let i = 0; i + 8 <= bits.length; i += 8) {
-    bytes.push(parseInt(bits.slice(i, i + 8), 2));
+    value = (value << 5) | val;
+    bits += 5;
+    if (bits >= 8) {
+      bytes.push((value >>> (bits - 8)) & 255);
+      bits -= 8;
+    }
   }
   return Buffer.from(bytes);
 }
+
 
 function generateTOTP(secret, timeStepSec = 30, digits = 6, offset = 0) {
   const counter = Math.floor(Date.now() / 1000 / timeStepSec) + offset;

@@ -180,10 +180,15 @@ export default function LoginPage({ onLogin }) {
     try {
       const res = await sendEmailOtp();
       if (res.ok) {
-        setEmailSentMsg(res.body?.message || 'Verification code sent to your email!');
+        if (res.body?.devNotice) {
+          setEmailSentMsg(res.body.message || 'OTP generated! (Check backend terminal for OTP code)');
+        } else {
+          setEmailSentMsg(res.body?.message || 'Verification code sent to your email!');
+        }
       } else {
         setError(res.body?.error || 'Failed to send verification code.');
       }
+
     } catch {
       setError('Failed to contact email service.');
     } finally {
