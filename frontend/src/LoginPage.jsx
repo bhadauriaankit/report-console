@@ -32,8 +32,10 @@ const EmailIcon = () => (
 );
 
 export default function LoginPage({ onLogin }) {
-  // Step 1: Login Credentials
+  // Step 1: Mode & Credentials
+  const [mode, setMode]         = useState('login'); // 'login' | 'register'
   const [username, setUsername] = useState('');
+  const [email, setEmail]       = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading]   = useState(false);
   const [error, setError]       = useState('');
@@ -89,6 +91,36 @@ export default function LoginPage({ onLogin }) {
       setLoading(false);
     }
   };
+
+  /* ─────────────────────────────────────────────────────────────
+     Handle Step 1: Account Registration
+  ───────────────────────────────────────────────────────────── */
+  const handleRegister = async (e) => {
+    e.preventDefault();
+    if (!username.trim() || !email.trim() || !password) return;
+    setLoading(true);
+    setError('');
+
+    try {
+      const res = await registerUser(username.trim(), email.trim(), password);
+      if (!res.ok) {
+        setError(res.body?.error || 'Registration failed.');
+        setLoading(false);
+        return;
+      }
+
+      // Account created! Automatically transition to 2FA setup!
+      setIn2fa(true);
+      setMaskedEmail(res.body.maskedEmail || '');
+      setTotpEnabled(false); // Brand new user, needs setup
+      setTwoFaMethod('totp'); // Start directly with QR code setup!
+    } catch {
+      setError('Cannot reach backend. Ensure backend is running on port 4000.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
 
   /* ─────────────────────────────────────────────────────────────
      Handle TOTP Setup (QR code fetching)
@@ -357,17 +389,37 @@ export default function LoginPage({ onLogin }) {
           <p className="lp-subtitle">Secure Database &amp; Reporting Console</p>
         </div>
 
+        {/* Mode Toggle: Sign In vs Create Account */}
+        <div className="lp-mode-tabs">
+          <button
+            type="button"
+            className={`lp-mode-tab ${mode === 'login' ? 'lp-mode-tab--active' : ''}`}
+            onClick={() => { setMode('login'); setError(''); }}
+          >
+            Sign In
+          </button>
+          <button
+            type="button"
+            className={`lp-mode-tab ${mode === 'register' ? 'lp-mode-tab--active' : ''}`}
+            onClick={() => { setMode('register'); setError(''); }}
+          >
+            Create Account
+          </button>
+        </div>
+
         {error && <div className="lp-error-banner">{error}</div>}
 
-        {/* Login Form (Handles both Admin and Regular Users) */}
-        <form className="lp-form" onSubmit={handleLogin} noValidate>
+        {/* ── Form: Sign In or Register ── */}
+        <form className="lp-form" onSubmit={mode === 'login' ? handleLogin : handleRegister} noValidate>
           <div className="lp-field">
-            <label className="lp-label" htmlFor="lp-username">Username or Email</label>
+            <label className="lp-label" htmlFor="lp-username">
+              {mode === 'login' ? 'Username or Email' : 'Username'}
+            </label>
             <input
               id="lp-username"
               type="text"
               className="lp-input"
-              placeholder="admin or demo_user"
+              placeholder={mode === 'login' ? 'admin or your_username' : 'Choose a username'}
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               disabled={loading}
@@ -376,39 +428,63 @@ export default function LoginPage({ onLogin }) {
             />
           </div>
 
+          {mode === 'register' && (
+            <div className="lp-field">
+              <label className="lp-label" htmlFor="lp-email">Email Address</label>
+              <input
+                id="lp-email"
+                type="email"
+                className="lp-input"
+                placeholder="your.email@company.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                disabled={loading}
+                autoComplete="email"
+              />
+            </div>
+          )}
+
           <div className="lp-field">
             <label className="lp-label" htmlFor="lp-password">Password</label>
             <input
               id="lp-password"
               type="password"
               className="lp-input"
-              placeholder="••••••••"
+              placeholder={mode === 'register' ? 'At least 6 characters' : '••••••••'}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               disabled={loading}
-              autoComplete="current-password"
+              autoComplete={mode === 'register' ? 'new-password' : 'current-password'}
             />
           </div>
 
           <button
             type="submit"
             className="lp-admin-btn"
-            disabled={loading || !username.trim() || !password}
+            disabled={
+              loading ||
+              !username.trim() ||
+              !password ||
+              (mode === 'register' && !email.trim())
+            }
           >
             {loading ? <span className="lp-spinner" /> : null}
-            {loading ? 'Verifying…' : 'Sign In'}
+            {loading
+              ? (mode === 'login' ? 'Verifying…' : 'Creating Account…')
+              : (mode === 'login' ? 'Sign In' : 'Create Account & Setup 2FA')}
           </button>
         </form>
 
         {/* Security / Help Info Box */}
         <div className="lp-info-box">
           <div className="lp-info-line">
-            <strong>👑 Admin:</strong> Direct instant sign-in without 2FA
+            <strong>👑 Admin:</strong> Direct sign-in without 2FA
           </div>
           <div className="lp-info-line">
-            <strong>🛡️ Other Users:</strong> Protected with 2FA (Authenticator App or Email OTP)
+            <strong>🛡️ Other Accounts:</strong> Protected with 2FA (QR Code Authenticator or Email OTP)
           </div>
         </div>
+
 
         <p className="lp-footer">
           Secure access · Session expires in 8 hours

@@ -68,7 +68,16 @@ export const loginUser = (username, password) =>
     body: JSON.stringify({ username, password }),
   }).then(json);
 
+export const registerUser = (username, email, password) =>
+  fetch(`${API}/api/auth/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ username, email, password }),
+  }).then(json);
+
 export const loginAdmin = loginUser; // Backward compatibility alias
+
 
 export const get2faSetup = () =>
   fetch(`${API}/api/auth/2fa/setup`, { credentials: 'include' }).then(json);

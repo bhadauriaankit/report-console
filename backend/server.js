@@ -272,10 +272,82 @@ app.get('/api/auth/me', (req, res) => {
   res.json({ user: req.session.user });
 });
 
+// POST /api/auth/register — Create a new account and immediately start 2FA setup
+app.post('/api/auth/register', express.json(), async (req, res) => {
+  const { username, email, password } = req.body || {};
+  if (!username || !email || !password) {
+    return res.status(400).json({ error: 'Username, email, and password are required' });
+  }
+
+  const cleanUser = username.trim().toLowerCase();
+  const cleanEmail = email.trim().toLowerCase();
+
+  // Basic email validation
+  if (!cleanEmail.includes('@') || !cleanEmail.includes('.')) {
+    return res.status(400).json({ error: 'Please enter a valid email address' });
+  }
+
+  if (password.length < 6) {
+    return res.status(400).json({ error: 'Password must be at least 6 characters long' });
+  }
+
+  try {
+    // Check if username or email already taken
+    const existing = await pgPool.query(
+      `SELECT username, email FROM public.portal_users WHERE LOWER(username) = $1 OR LOWER(email) = $2`,
+      [cleanUser, cleanEmail]
+    );
+
+    if (existing.rows.length > 0) {
+      const match = existing.rows[0];
+      if (match.username.toLowerCase() === cleanUser) {
+        return res.status(409).json({ error: 'This username is already taken. Please choose another.' });
+      }
+      return res.status(409).json({ error: 'An account with this email already exists.' });
+    }
+
+    // Hash password and insert
+    const passwordHash = await bcrypt.hash(password, 10);
+    const insertRes = await pgPool.query(
+      `INSERT INTO public.portal_users (username, email, password_hash, role)
+       VALUES ($1, $2, $3, 'user')
+       RETURNING id, username, email, role, totp_enabled`,
+      [username.trim(), cleanEmail, passwordHash]
+    );
+
+    const newUser = insertRes.rows[0];
+
+    // Immediately put into pending 2FA state so user sets up 2FA right away!
+    req.session.pending2fa = {
+      id: newUser.id,
+      username: newUser.username,
+      email: newUser.email,
+      role: newUser.role || 'user',
+      totp_enabled: false,
+    };
+
+    const emailParts = newUser.email.split('@');
+    const maskedEmail = `${emailParts[0].slice(0, 1)}***@${emailParts[1] || ''}`;
+
+    return res.json({
+      ok: true,
+      requires2fa: true,
+      isNewAccount: true,
+      maskedEmail,
+      totpEnabled: false,
+      username: newUser.username,
+    });
+  } catch (err) {
+    console.error('[auth/register]', err.message);
+    return res.status(500).json({ error: 'Failed to create account. Database error.' });
+  }
+});
+
 // POST /api/auth/login — First step: verify username + password
 // If Admin -> logs in immediately
 // If Regular user -> enters 2FA state (returns 2FA required response)
 app.post('/api/auth/login', express.json(), async (req, res) => {
+
   const { username, password } = req.body || {};
   if (!username || !password) return res.status(400).json({ error: 'Username and password required' });
 

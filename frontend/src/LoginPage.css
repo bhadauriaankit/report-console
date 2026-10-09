@@ -75,8 +75,41 @@
   margin: 0;
 }
 
+/* ── Mode Toggle Tabs (Sign In vs Create Account) ── */
+.lp-mode-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  background: var(--surface-alt);
+  padding: 4px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  margin-bottom: 20px;
+}
+
+.lp-mode-tab {
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 8px 14px;
+  border-radius: var(--radius-sm);
+  border: none;
+  background: none;
+  color: var(--ink-3);
+  cursor: pointer;
+  transition: all 150ms ease;
+  text-align: center;
+}
+
+.lp-mode-tab--active {
+  background: var(--surface);
+  color: var(--accent);
+  box-shadow: var(--shadow-sm);
+}
+
 /* ── 2FA Method Tabs ── */
 .lp-2fa-tabs {
+
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 6px;
