@@ -6,6 +6,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import pg from 'pg';
 import SftpClient from 'ssh2-sftp-client';
+import session from 'express-session';
+import * as msal from '@azure/msal-node';
+
 
 // ---------------------------------------------------------------
 // PostgreSQL pool & configuration (strictly from environment variables)
@@ -131,21 +134,154 @@ function remember(envelope) {
 }
 
 // ---------------------------------------------------------------
+// Authentication Configuration
+// ---------------------------------------------------------------
+const ADMIN_USER     = process.env.ADMIN_USER     || 'admin';
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'Admin@1234';
+const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
+
+// Azure AD / Microsoft login config
+const AZURE_CLIENT_ID     = process.env.AZURE_CLIENT_ID     || '';
+const AZURE_TENANT_ID     = process.env.AZURE_TENANT_ID     || 'common';
+const AZURE_CLIENT_SECRET = process.env.AZURE_CLIENT_SECRET || '';
+const AZURE_REDIRECT_URI  = process.env.AZURE_REDIRECT_URI  || 'http://localhost:4000/api/auth/callback';
+const MICROSOFT_ENABLED   = !!(AZURE_CLIENT_ID && AZURE_CLIENT_SECRET);
+
+// MSAL confidential client (only when Azure credentials are configured)
+let msalClient = null;
+if (MICROSOFT_ENABLED) {
+  msalClient = new msal.ConfidentialClientApplication({
+    auth: {
+      clientId:     AZURE_CLIENT_ID,
+      authority:    `https://login.microsoftonline.com/${AZURE_TENANT_ID}`,
+      clientSecret: AZURE_CLIENT_SECRET,
+    },
+  });
+}
+
+// ---------------------------------------------------------------
 // App
 // ---------------------------------------------------------------
 const app = express();
-app.use(cors({ origin: CORS_ORIGIN }));
 
+app.use(cors({
+  origin: CORS_ORIGIN.length ? CORS_ORIGIN : true,
+  credentials: true,
+}));
+
+// Session middleware (HttpOnly cookie, 8h expiry)
+app.use(session({
+  secret: SESSION_SECRET,
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    httpOnly: true,
+    secure: false,
+    sameSite: 'lax',
+    maxAge: 8 * 60 * 60 * 1000,
+  },
+}));
+
+// Request logger
 app.use((req, res, next) => {
   const started = Date.now();
   res.on('finish', () => {
-    if (req.path === '/api/events') return; // SSE stays open, skip noise
+    if (req.path === '/api/events') return;
     console.log(`${req.method} ${req.path} -> ${res.statusCode} (${Date.now() - started}ms)`);
   });
   next();
 });
 
+// Auth guard – protects all API routes except auth endpoints
+function requireAuth(req, res, next) {
+  const open = ['/api/auth/', '/health'];
+  if (open.some((p) => req.path.startsWith(p))) return next();
+  if (req.session?.user) return next();
+  return res.status(401).json({ error: 'Unauthorized', code: 'NOT_LOGGED_IN' });
+}
+app.use(requireAuth);
+
 app.get('/health', (_req, res) => res.json({ ok: true, viewers: sseClients.size }));
+
+// ---------------------------------------------------------------
+// Auth Endpoints
+// ---------------------------------------------------------------
+
+// GET /api/auth/me — returns current session user (or 401)
+app.get('/api/auth/me', (req, res) => {
+  if (!req.session?.user) return res.status(401).json({ error: 'Not logged in', code: 'NOT_LOGGED_IN' });
+  res.json({ user: req.session.user });
+});
+
+// POST /api/auth/login — Admin username/password login
+app.post('/api/auth/login', express.json(), (req, res) => {
+  const { username, password } = req.body || {};
+  if (!username || !password) return res.status(400).json({ error: 'Username and password required' });
+
+  if (username === ADMIN_USER && password === ADMIN_PASSWORD) {
+    req.session.user = { name: 'Administrator', email: username, role: 'admin' };
+    return res.json({ ok: true, user: req.session.user });
+  }
+  return res.status(401).json({ error: 'Invalid username or password' });
+});
+
+// GET /api/auth/microsoft — initiate Microsoft OAuth flow
+app.get('/api/auth/microsoft', async (req, res) => {
+  if (!MICROSOFT_ENABLED) {
+    return res.status(503).json({ error: 'Microsoft login is not configured. Set AZURE_CLIENT_ID and AZURE_CLIENT_SECRET in backend/.env' });
+  }
+  try {
+    const url = await msalClient.getAuthCodeUrl({
+      scopes: ['openid', 'profile', 'email', 'User.Read'],
+      redirectUri: AZURE_REDIRECT_URI,
+    });
+    res.redirect(url);
+  } catch (e) {
+    console.error('[auth/microsoft]', e.message);
+    res.status(500).json({ error: 'Failed to generate Microsoft login URL' });
+  }
+});
+
+// GET /api/auth/callback — Microsoft OAuth callback
+app.get('/api/auth/callback', async (req, res) => {
+  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5175';
+  if (!MICROSOFT_ENABLED) return res.redirect(`${frontendUrl}/login?error=microsoft_disabled`);
+
+  const { code, error } = req.query;
+  if (error || !code) {
+    console.error('[auth/callback] Microsoft error:', error);
+    return res.redirect(`${frontendUrl}/login?error=${encodeURIComponent(error || 'no_code')}`);
+  }
+
+  try {
+    const tokenResponse = await msalClient.acquireTokenByCode({
+      code,
+      scopes: ['openid', 'profile', 'email', 'User.Read'],
+      redirectUri: AZURE_REDIRECT_URI,
+    });
+
+    const { name, username } = tokenResponse.account;
+    req.session.user = {
+      name: name || username,
+      email: username,
+      role: 'user',
+    };
+    res.redirect(`${frontendUrl}/`);
+  } catch (e) {
+    console.error('[auth/callback]', e.message);
+    res.redirect(`${frontendUrl}/login?error=${encodeURIComponent(e.message)}`);
+  }
+});
+
+// POST /api/auth/logout — destroy session
+app.post('/api/auth/logout', (req, res) => {
+  req.session.destroy(() => {
+    res.clearCookie('connect.sid');
+    res.json({ ok: true });
+  });
+});
+
+
 
 // Requests sent to Scaler that have not been answered yet (requestId -> time sent).
 // Used as a fallback when Scaler's callback does not include the requestId.

@@ -1,0 +1,241 @@
+/* =========================================================
+   Login Page – lp-* prefix
+   ========================================================= */
+
+.lp-overlay {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+  padding: 24px;
+}
+
+.lp-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  padding: 40px 36px 32px;
+  width: 100%;
+  max-width: 420px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+/* ── Brand ── */
+.lp-brand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 28px;
+  text-align: center;
+}
+
+.lp-brand-icon {
+  width: 64px;
+  height: 64px;
+  border-radius: 16px;
+  background: var(--accent-light);
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 4px;
+}
+
+.lp-title {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--ink);
+  letter-spacing: -0.02em;
+  margin: 0;
+}
+
+.lp-subtitle {
+  font-size: 13px;
+  color: var(--ink-3);
+  margin: 0;
+}
+
+/* ── Microsoft button ── */
+.lp-ms-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #fff;
+  color: #1a1a1a;
+  border: 1.5px solid #d0d0d0;
+  border-radius: var(--radius-sm);
+  padding: 11px 18px;
+  font-size: 14px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  text-decoration: none;
+  transition: all 150ms ease;
+  box-shadow: 0 1px 3px rgba(0,0,0,.06);
+  width: 100%;
+  justify-content: center;
+}
+
+@media (prefers-color-scheme: dark) {
+  .lp-ms-btn {
+    background: #2d2d2d;
+    color: #f0f0f0;
+    border-color: #444;
+  }
+}
+
+.lp-ms-btn:hover {
+  background: #f3f3f3;
+  border-color: #aaa;
+  box-shadow: 0 2px 6px rgba(0,0,0,.1);
+}
+
+@media (prefers-color-scheme: dark) {
+  .lp-ms-btn:hover {
+    background: #3a3a3a;
+  }
+}
+
+.lp-ms-badge {
+  margin-left: auto;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--ok);
+  background: var(--ok-light);
+  border: 1px solid var(--ok-border);
+  padding: 2px 7px;
+  border-radius: 999px;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+/* ── Divider ── */
+.lp-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--ink-4);
+  font-size: 12px;
+  margin: 20px 0;
+}
+.lp-divider::before,
+.lp-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+/* ── Admin form ── */
+.lp-section-label {
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  margin: 0 0 14px;
+}
+
+.lp-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.lp-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.lp-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.lp-input {
+  font: inherit;
+  font-size: 14px;
+  padding: 9px 12px;
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-alt);
+  color: var(--ink);
+  outline: none;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+  width: 100%;
+  box-sizing: border-box;
+}
+.lp-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(37,99,235,.12);
+}
+.lp-input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.lp-admin-btn {
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  padding: 10px 18px;
+  background: var(--ink);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: all 150ms ease;
+  width: 100%;
+  margin-top: 4px;
+}
+.lp-admin-btn:hover:not(:disabled) {
+  background: var(--ink-2);
+}
+.lp-admin-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* ── Error ── */
+.lp-error-banner {
+  font-size: 13px;
+  color: var(--danger);
+  background: var(--danger-light);
+  border: 1px solid var(--danger-border);
+  border-radius: var(--radius-sm);
+  padding: 9px 13px;
+}
+
+/* ── Spinner ── */
+.lp-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255,255,255,.4);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: lp-spin 0.7s linear infinite;
+}
+@keyframes lp-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ── Footer ── */
+.lp-footer {
+  font-size: 11.5px;
+  color: var(--ink-4);
+  text-align: center;
+  margin-top: 22px;
+  margin-bottom: 0;
+}

@@ -18,12 +18,6 @@ export const sendRequest = (payload) =>
 
 /**
  * Build and send a report request with the full filter set.
- * @param {string} requestId   - Unique id for SSE/polling correlation.
- * @param {string} reportType  - Required report type key.
- * @param {string} [status]    - Optional status filter; omitted when empty.
- * @param {string} [datePreset]- "today" activates the preset.
- * @param {string} [dateFrom]  - ISO date string (yyyy-mm-dd); omitted when empty.
- * @param {string} [dateTo]    - ISO date string (yyyy-mm-dd); omitted when empty.
  */
 export const fetchReportData = (requestId, reportType, status, datePreset, dateFrom, dateTo) => {
   const payload = { requestId, reportType };
@@ -43,23 +37,40 @@ export const getResult = (requestId) =>
 
 export const eventsUrl = `${API}/api/events`;
 
-// ── PostgreSQL Live Monitor helpers (uses API variable from env) ──
-export const getPgTables = () => fetch(`${API}/api/pg/tables`).then(json);
+// ── PostgreSQL Live Monitor helpers ──
+export const getPgTables = () => fetch(`${API}/api/pg/tables`, { credentials: 'include' }).then(json);
 
 export const getPgRows = (table, options = {}) => {
   const params = new URLSearchParams({ table });
-  if (options.limit) params.set('limit', String(options.limit));
-  if (options.dateFrom) params.set('dateFrom', options.dateFrom);
-  if (options.dateTo) params.set('dateTo', options.dateTo);
+  if (options.limit)      params.set('limit', String(options.limit));
+  if (options.dateFrom)   params.set('dateFrom', options.dateFrom);
+  if (options.dateTo)     params.set('dateTo', options.dateTo);
   if (options.datePreset) params.set('datePreset', options.datePreset);
-  if (options.status) params.set('status', options.status);
-  return fetch(`${API}/api/pg/rows?${params.toString()}`).then(json);
+  if (options.status)     params.set('status', options.status);
+  return fetch(`${API}/api/pg/rows?${params.toString()}`, { credentials: 'include' }).then(json);
 };
-
 
 export const getPgFileUrl = (filePath, download = false) =>
   `${API}/api/pg/file?path=${encodeURIComponent(filePath)}${download ? '&download=1' : ''}`;
 
 export const pgStreamUrl = (table) =>
   `${API}/api/pg/stream?table=${encodeURIComponent(table)}`;
+
+// ── Auth helpers ──
+export const getMe = () =>
+  fetch(`${API}/api/auth/me`, { credentials: 'include' }).then(json);
+
+export const loginAdmin = (username, password) =>
+  fetch(`${API}/api/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ username, password }),
+  }).then(json);
+
+export const logout = () =>
+  fetch(`${API}/api/auth/logout`, { method: 'POST', credentials: 'include' }).then(json);
+
+export const microsoftLoginUrl = `${API}/api/auth/microsoft`;
+
 

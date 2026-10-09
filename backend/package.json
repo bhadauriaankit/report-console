@@ -9,9 +9,11 @@
     "mock-scaler": "node test/mock-scaler.js"
   },
   "dependencies": {
+    "@azure/msal-node": "^7.0.1",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
+    "express-session": "^1.19.0",
     "pg": "^8.23.1",
     "ssh2-sftp-client": "^12.1.1"
   }
