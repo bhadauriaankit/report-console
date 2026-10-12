@@ -487,7 +487,7 @@ export default function LoginPage({ onLogin }) {
         {/* Security / Help Info Box */}
         <div className="lp-info-box">
           <div className="lp-info-line">
-            <strong>👑 Admin:</strong> Direct sign-in without 2FA
+            <strong>👑 Admin:</strong> Direct sign-in (or 2FA if ADMIN_ENFORCE_2FA enabled)
           </div>
           <div className="lp-info-line">
             <strong>🛡️ Other Accounts:</strong> Protected with 2FA (QR Code Authenticator or Email OTP)

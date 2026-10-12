@@ -76,12 +76,19 @@ function generateTOTP(secret, timeStepSec = 30, digits = 6, offset = 0) {
   return otp.toString().padStart(digits, '0');
 }
 
-function verifyTOTP(token, secret, window = 1) {
+function verifyTOTP(token, secret, window = 1, lastVerifiedStep = null) {
   const cleanToken = String(token).trim();
+  const currentStep = Math.floor(Date.now() / 1000 / 30);
   for (let i = -window; i <= window; i++) {
-    if (generateTOTP(secret, 30, 6, i) === cleanToken) return true;
+    const step = currentStep + i;
+    if (lastVerifiedStep !== null && step <= Number(lastVerifiedStep)) {
+      continue; // Replay prevention: do not allow same or older step
+    }
+    if (generateTOTP(secret, 30, 6, i) === cleanToken) {
+      return { valid: true, step };
+    }
   }
-  return false;
+  return { valid: false, step: null };
 }
 
 
@@ -211,11 +218,94 @@ function remember(envelope) {
 }
 
 // ---------------------------------------------------------------
-// Authentication Configuration
+// Authentication Configuration & Security Helpers
 // ---------------------------------------------------------------
-const ADMIN_USER     = process.env.ADMIN_USER     || 'admin';
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'Admin@1234';
-const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
+const ADMIN_USER        = process.env.ADMIN_USER        || 'admin';
+const ADMIN_PASSWORD    = process.env.ADMIN_PASSWORD    || 'Admin@1234';
+const ADMIN_ENFORCE_2FA = process.env.ADMIN_ENFORCE_2FA === 'true';
+const SESSION_SECRET    = process.env.SESSION_SECRET    || crypto.randomBytes(32).toString('hex');
+
+// AES-256-GCM encryption key for TOTP secrets stored in the database
+const TOTP_ENCRYPTION_KEY = crypto
+  .createHash('sha256')
+  .update(process.env.TOTP_ENCRYPTION_KEY || SESSION_SECRET)
+  .digest();
+
+function encryptSecret(plainSecret) {
+  if (!plainSecret) return null;
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', TOTP_ENCRYPTION_KEY, iv);
+  let encrypted = cipher.update(plainSecret, 'utf8', 'hex');
+  encrypted += cipher.final('hex');
+  const tag = cipher.getAuthTag().toString('hex');
+  return `enc:${iv.toString('hex')}:${tag}:${encrypted}`;
+}
+
+function decryptSecret(storedSecret) {
+  if (!storedSecret) return null;
+  if (!storedSecret.startsWith('enc:')) {
+    // Backwards-compatible fallback for existing plaintext secrets in database
+    return storedSecret;
+  }
+  try {
+    const parts = storedSecret.split(':');
+    if (parts.length !== 4) return storedSecret;
+    const iv = Buffer.from(parts[1], 'hex');
+    const tag = Buffer.from(parts[2], 'hex');
+    const encryptedText = parts[3];
+    const decipher = crypto.createDecipheriv('aes-256-gcm', TOTP_ENCRYPTION_KEY, iv);
+    decipher.setAuthTag(tag);
+    let decrypted = decipher.update(encryptedText, 'hex', 'utf8');
+    decrypted += decipher.final('utf8');
+    return decrypted;
+  } catch (err) {
+    console.error('[decryptSecret error]', err.message);
+    return null;
+  }
+}
+
+// In-memory rate limiting middleware factory
+function createRateLimiter({ windowMs = 60 * 1000, max = 5, message = 'Too many requests, please try again later.' }) {
+  const hits = new Map();
+  // Periodically clean up expired records
+  setInterval(() => {
+    const now = Date.now();
+    for (const [key, record] of hits.entries()) {
+      if (now - record.resetTime > windowMs) {
+        hits.delete(key);
+      }
+    }
+  }, 60 * 1000).unref();
+
+  return (req, res, next) => {
+    const ip = req.ip || req.connection?.remoteAddress || 'unknown';
+    const key = `${ip}:${req.path}`;
+    const now = Date.now();
+    const record = hits.get(key) || { count: 0, resetTime: now + windowMs };
+
+    if (now > record.resetTime) {
+      record.count = 1;
+      record.resetTime = now + windowMs;
+    } else {
+      record.count += 1;
+    }
+
+    hits.set(key, record);
+
+    if (record.count > max) {
+      const retryAfterSec = Math.ceil((record.resetTime - now) / 1000);
+      res.setHeader('Retry-After', retryAfterSec);
+      return res.status(429).json({ error: message, retryAfter: retryAfterSec });
+    }
+    next();
+  };
+}
+
+// Rate limiter instances for auth endpoints
+const loginRateLimiter   = createRateLimiter({ windowMs: 5 * 60 * 1000, max: 10, message: 'Too many login attempts. Please wait 5 minutes before trying again.' });
+const registerRateLimiter = createRateLimiter({ windowMs: 10 * 60 * 1000, max: 5, message: 'Too many account registrations. Please try again later.' });
+const otpSendRateLimiter = createRateLimiter({ windowMs: 2 * 60 * 1000, max: 3, message: 'Too many OTP requests. Please wait 2 minutes.' });
+const otpVerifyRateLimiter = createRateLimiter({ windowMs: 5 * 60 * 1000, max: 10, message: 'Too many verification attempts. Please wait before trying again.' });
 
 // Azure AD / Microsoft login config
 const AZURE_CLIENT_ID     = process.env.AZURE_CLIENT_ID     || '';
@@ -266,7 +356,7 @@ app.use(session({
   saveUninitialized: false,
   cookie: {
     httpOnly: true,
-    secure: false,
+    secure: process.env.NODE_ENV === 'production',
     sameSite: 'lax',
     maxAge: 8 * 60 * 60 * 1000,
   },
@@ -327,10 +417,13 @@ async function initAuthDb() {
         email VARCHAR(255) UNIQUE NOT NULL,
         password_hash VARCHAR(255) NOT NULL,
         role VARCHAR(50) DEFAULT 'user',
-        totp_secret VARCHAR(100),
+        totp_secret VARCHAR(255),
         totp_enabled BOOLEAN DEFAULT FALSE,
+        last_totp_step BIGINT DEFAULT 0,
         created_at TIMESTAMP DEFAULT NOW()
       );
+      ALTER TABLE public.portal_users ADD COLUMN IF NOT EXISTS last_totp_step BIGINT DEFAULT 0;
+      ALTER TABLE public.portal_users ALTER COLUMN totp_secret TYPE VARCHAR(255);
     `);
 
     // Check if demo user exists; if not, create one: 'demo_user' / 'Demo@1234'
@@ -360,7 +453,7 @@ app.get('/api/auth/me', (req, res) => {
 });
 
 // POST /api/auth/register — Create a new account and immediately start 2FA setup
-app.post('/api/auth/register', express.json(), async (req, res) => {
+app.post('/api/auth/register', registerRateLimiter, express.json(), async (req, res) => {
   const { username, email, password } = req.body || {};
   if (!username || !email || !password) {
     return res.status(400).json({ error: 'Username, email, and password are required' });
@@ -411,6 +504,7 @@ app.post('/api/auth/register', express.json(), async (req, res) => {
       email: newUser.email,
       role: newUser.role || 'user',
       totp_enabled: false,
+      last_totp_step: 0,
     };
 
     const emailParts = newUser.email.split('@');
@@ -431,17 +525,36 @@ app.post('/api/auth/register', express.json(), async (req, res) => {
 });
 
 // POST /api/auth/login — First step: verify username + password
-// If Admin -> logs in immediately
+// If Admin -> logs in immediately (or requires 2FA if ADMIN_ENFORCE_2FA is true)
 // If Regular user -> enters 2FA state (returns 2FA required response)
-app.post('/api/auth/login', express.json(), async (req, res) => {
+app.post('/api/auth/login', loginRateLimiter, express.json(), async (req, res) => {
 
   const { username, password } = req.body || {};
   if (!username || !password) return res.status(400).json({ error: 'Username and password required' });
 
   // 1. Check if Admin master login
   if (username === ADMIN_USER && password === ADMIN_PASSWORD) {
-    req.session.user = { name: 'Administrator', email: username, role: 'admin' };
-    return res.json({ ok: true, user: req.session.user });
+    if (!ADMIN_ENFORCE_2FA) {
+      req.session.user = { name: 'Administrator', email: username, role: 'admin' };
+      return res.json({ ok: true, user: req.session.user });
+    }
+
+    // Admin 2FA enforcement enabled
+    req.session.pending2fa = {
+      id: 0,
+      username: ADMIN_USER,
+      email: process.env.ADMIN_EMAIL || 'admin@reportportal.local',
+      role: 'admin',
+      totp_enabled: false,
+      last_totp_step: 0,
+    };
+    return res.json({
+      ok: true,
+      requires2fa: true,
+      maskedEmail: 'a***@reportportal.local',
+      totpEnabled: false,
+      username: ADMIN_USER,
+    });
   }
 
   // 2. Check portal_users table in PostgreSQL
@@ -461,14 +574,16 @@ app.post('/api/auth/login', express.json(), async (req, res) => {
       return res.status(401).json({ error: 'Invalid username or password' });
     }
 
-    // Password valid! Store temporary 2FA pending state in session
+    // Password valid! Decrypt TOTP secret if present and store pending 2FA state
+    const decryptedSecret = decryptSecret(dbUser.totp_secret);
     req.session.pending2fa = {
       id: dbUser.id,
       username: dbUser.username,
       email: dbUser.email,
       role: dbUser.role || 'user',
       totp_enabled: dbUser.totp_enabled,
-      totp_secret: dbUser.totp_secret,
+      totp_secret: decryptedSecret,
+      last_totp_step: dbUser.last_totp_step ? Number(dbUser.last_totp_step) : 0,
     };
 
     // Mask email for privacy (e.g. d***@company.com)
@@ -512,50 +627,76 @@ app.get('/api/auth/2fa/setup', async (req, res) => {
 });
 
 // POST /api/auth/2fa/verify-totp — Verify 6-digit Authenticator code
-app.post('/api/auth/2fa/verify-totp', express.json(), async (req, res) => {
+app.post('/api/auth/2fa/verify-totp', otpVerifyLimiter, express.json(), async (req, res) => {
   const pending = req.session?.pending2fa;
   if (!pending) return res.status(401).json({ error: 'Session expired or not in 2FA mode' });
 
   const { token, isSetup } = req.body || {};
   if (!token) return res.status(400).json({ error: '6-digit code required' });
 
+  // Rate-limiting / lockout per session: max 5 failed attempts
+  pending.totpAttempts = (pending.totpAttempts || 0) + 1;
+  if (pending.totpAttempts > 5) {
+    delete req.session.pending2fa;
+    return res.status(429).json({ error: 'Too many invalid attempts. Session expired. Please sign in again.' });
+  }
+
   const secretToVerify = isSetup ? pending.tempSecret : pending.totp_secret;
   if (!secretToVerify) {
     return res.status(400).json({ error: 'Authenticator has not been set up. Please set up first.' });
   }
 
-  const isValid = verifyTOTP(token, secretToVerify);
-  if (!isValid) {
-    return res.status(400).json({ error: 'Invalid authenticator code. Codes refresh every 30 seconds.' });
+  // Verify TOTP with replay protection (ensures code cannot be reused in the same window)
+  const verifyResult = verifyTOTP(token, secretToVerify, 1, pending.last_totp_step);
+  if (!verifyResult.valid) {
+    const remaining = 5 - pending.totpAttempts;
+    return res.status(400).json({
+      error: `Invalid authenticator code. Codes refresh every 30 seconds. (${remaining} attempt(s) remaining)`,
+    });
   }
 
-
-
-  // If this was a setup verification, save secret and set totp_enabled = true in DB
-  if (isSetup) {
+  // If this was a setup verification, save encrypted secret and set totp_enabled = true in DB
+  if (isSetup && pending.id > 0) {
     try {
+      const encryptedSecret = encryptSecret(secretToVerify);
       await pgPool.query(
-        `UPDATE public.portal_users SET totp_secret = $1, totp_enabled = TRUE WHERE id = $2`,
-        [secretToVerify, pending.id]
+        `UPDATE public.portal_users SET totp_secret = $1, totp_enabled = TRUE, last_totp_step = $2 WHERE id = $3`,
+        [encryptedSecret, verifyResult.step, pending.id]
       );
     } catch (dbErr) {
       console.error('[auth/2fa/setup save]', dbErr.message);
     }
+  } else if (!isSetup && pending.id > 0) {
+    // Record last used time step to prevent replay attacks
+    try {
+      await pgPool.query(
+        `UPDATE public.portal_users SET last_totp_step = $1 WHERE id = $2`,
+        [verifyResult.step, pending.id]
+      );
+    } catch (dbErr) {
+      console.error('[auth/2fa step update]', dbErr.message);
+    }
   }
 
-  // 2FA Verified! Promote to full session
-  req.session.user = {
+  // 2FA Verified! Regenerate session ID to prevent session fixation and promote user
+  const userPayload = {
     name: pending.username,
     email: pending.email,
     role: pending.role,
   };
-  delete req.session.pending2fa;
 
-  res.json({ ok: true, user: req.session.user });
+  req.session.regenerate((err) => {
+    if (err) {
+      console.error('[session regenerate error]', err.message);
+      return res.status(500).json({ error: 'Failed to establish secure session' });
+    }
+    req.session.user = userPayload;
+    return res.json({ ok: true, user: req.session.user });
+  });
 });
 
 // POST /api/auth/2fa/send-email-otp — Generate and send 6-digit code to user email
-app.post('/api/auth/2fa/send-email-otp', async (req, res) => {
+app.post('/api/auth/2fa/send-email-otp', otpSendRateLimiter, async (req, res) => {
   const pending = req.session?.pending2fa;
   if (!pending) return res.status(401).json({ error: 'Session expired or not in 2FA mode' });
 
@@ -563,8 +704,9 @@ app.post('/api/auth/2fa/send-email-otp', async (req, res) => {
   const code = String(Math.floor(100000 + Math.random() * 900000));
   const expiresAt = Date.now() + 5 * 60 * 1000; // 5 minutes validity
 
-  emailOtpStore.set(pending.email.toLowerCase(), { code, expiresAt });
+  emailOtpStore.set(pending.email.toLowerCase(), { code, expiresAt, attempts: 0 });
 
+  // Log strictly on server console in development mode
   console.log(`\n======================================================`);
   console.log(`🔐 [EMAIL 2FA OTP] For: ${pending.email}`);
   console.log(`   Verification Code: ${code} (Expires in 5 minutes)`);
@@ -590,26 +732,25 @@ app.post('/api/auth/2fa/send-email-otp', async (req, res) => {
       return res.json({ ok: true, sent: true, message: `Verification code sent to your email` });
     } catch (mailErr) {
       console.error('[email otp send error]', mailErr.message);
-      // Still allow testing via console print
       return res.json({
         ok: true,
         sent: false,
-        message: `SMTP not configured or error. Check backend terminal for the OTP code.`,
+        message: `SMTP delivery failed. Check backend terminal logs for troubleshooting.`,
       });
     }
   } else {
-    // Local / Dev mode: code printed to console
+    // Local / Dev mode: code logged to server console ONLY. NEVER returned in HTTP response!
     return res.json({
       ok: true,
       sent: false,
       devNotice: true,
-      message: `Code generated! (Check backend terminal for OTP code: ${code})`,
+      message: `Verification code generated. (Check backend terminal in development mode)`,
     });
   }
 });
 
 // POST /api/auth/2fa/verify-email-otp — Verify email 6-digit OTP code
-app.post('/api/auth/2fa/verify-email-otp', express.json(), (req, res) => {
+app.post('/api/auth/2fa/verify-email-otp', otpVerifyLimiter, express.json(), (req, res) => {
   const pending = req.session?.pending2fa;
   if (!pending) return res.status(401).json({ error: 'Session expired or not in 2FA mode' });
 
@@ -626,20 +767,38 @@ app.post('/api/auth/2fa/verify-email-otp', express.json(), (req, res) => {
     return res.status(400).json({ error: 'Code expired. Please request a new one.' });
   }
 
-  if (record.code !== String(code).trim()) {
-    return res.status(400).json({ error: 'Incorrect verification code. Please check and try again.' });
+  // Attempt lockout: invalidate after 5 failed tries
+  if ((record.attempts || 0) >= 5) {
+    emailOtpStore.delete(pending.email.toLowerCase());
+    return res.status(429).json({ error: 'Too many incorrect attempts. Code has been invalidated. Please request a new code.' });
   }
 
-  // Success: Clear code and promote to full session
+  if (record.code !== String(code).trim()) {
+    record.attempts = (record.attempts || 0) + 1;
+    const remaining = 5 - record.attempts;
+    if (remaining <= 0) {
+      emailOtpStore.delete(pending.email.toLowerCase());
+      return res.status(429).json({ error: 'Too many incorrect attempts. Code has been invalidated. Please request a new code.' });
+    }
+    return res.status(400).json({ error: `Incorrect verification code. (${remaining} attempt(s) remaining)` });
+  }
+
+  // Success: Clear code, regenerate session ID to prevent session fixation, promote to user
   emailOtpStore.delete(pending.email.toLowerCase());
-  req.session.user = {
+  const userPayload = {
     name: pending.username,
     email: pending.email,
     role: pending.role,
   };
-  delete req.session.pending2fa;
 
-  res.json({ ok: true, user: req.session.user });
+  req.session.regenerate((err) => {
+    if (err) {
+      console.error('[session regenerate error]', err.message);
+      return res.status(500).json({ error: 'Failed to establish secure session' });
+    }
+    req.session.user = userPayload;
+    return res.json({ ok: true, user: req.session.user });
+  });
 });
 
 // POST /api/auth/logout — destroy session
