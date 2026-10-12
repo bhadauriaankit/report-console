@@ -301,11 +301,10 @@ function createRateLimiter({ windowMs = 60 * 1000, max = 5, message = 'Too many 
   };
 }
 
-// Rate limiter instances for auth endpoints
-const loginRateLimiter     = createRateLimiter({ windowMs: 5 * 60 * 1000, max: 10, message: 'Too many login attempts. Please wait 5 minutes before trying again.' });
-const registerRateLimiter  = createRateLimiter({ windowMs: 10 * 60 * 1000, max: 5, message: 'Too many account registrations. Please try again later.' });
-const otpSendRateLimiter   = createRateLimiter({ windowMs: 2 * 60 * 1000, max: 3, message: 'Too many OTP requests. Please wait 2 minutes.' });
-const otpVerifyRateLimiter = createRateLimiter({ windowMs: 5 * 60 * 1000, max: 10, message: 'Too many verification attempts. Please wait before trying again.' });
+// Rate limiter instances for auth endpoints (1 minute cooldown on login, unconstrained signup)
+const loginRateLimiter     = createRateLimiter({ windowMs: 60 * 1000, max: 5, message: 'Too many login attempts. Please wait 1 minute before trying again.' });
+const otpSendRateLimiter   = createRateLimiter({ windowMs: 60 * 1000, max: 5, message: 'Too many OTP requests. Please wait 1 minute.' });
+const otpVerifyRateLimiter = createRateLimiter({ windowMs: 60 * 1000, max: 10, message: 'Too many verification attempts. Please wait 1 minute before trying again.' });
 const otpVerifyLimiter     = otpVerifyRateLimiter;
 
 // Azure AD / Microsoft login config
@@ -453,8 +452,8 @@ app.get('/api/auth/me', (req, res) => {
   res.json({ user: req.session.user });
 });
 
-// POST /api/auth/register — Create a new account and immediately start 2FA setup
-app.post('/api/auth/register', registerRateLimiter, express.json(), async (req, res) => {
+// POST /api/auth/register — Create a new account and immediately start 2FA setup (unlimited signups)
+app.post('/api/auth/register', express.json(), async (req, res) => {
   const { username, email, password } = req.body || {};
   if (!username || !email || !password) {
     return res.status(400).json({ error: 'Username, email, and password are required' });
@@ -1000,10 +999,12 @@ app.get('/api/results/:requestId', (req, res) => {
 // Live Monitor – PostgreSQL endpoints
 // ---------------------------------------------------------------
 
-/** Allowed table name: only word chars, max 64 chars */
-const validTable = (t) => typeof t === 'string' && /^\w{1,64}$/.test(t);
+/** Allowed table name: only word chars, max 64 chars, excluding internal auth tables */
+const INTERNAL_TABLES = ['portal_users'];
+const validTable = (t) =>
+  typeof t === 'string' && /^\w{1,64}$/.test(t) && !INTERNAL_TABLES.includes(t.toLowerCase());
 
-// GET /api/pg/tables  – list all user tables in the connected DB
+// GET /api/pg/tables  – list all user tables in the connected DB (excluding internal auth tables)
 app.get('/api/pg/tables', async (_req, res) => {
   try {
     const { rows } = await pgPool.query(
@@ -1011,6 +1012,7 @@ app.get('/api/pg/tables', async (_req, res) => {
          FROM information_schema.tables
         WHERE table_schema = 'public'
           AND table_type   = 'BASE TABLE'
+          AND LOWER(table_name) NOT IN ('portal_users')
         ORDER BY table_name`
     );
     res.json({ tables: rows.map((r) => r.table_name) });
