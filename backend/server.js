@@ -999,20 +999,26 @@ app.get('/api/results/:requestId', (req, res) => {
 // Live Monitor – PostgreSQL endpoints
 // ---------------------------------------------------------------
 
-/** Allowed table name: only word chars, max 64 chars, excluding internal auth tables */
+/** Allowed table name: only word chars, max 64 chars. portal_users is restricted to admins only */
 const INTERNAL_TABLES = ['portal_users'];
-const validTable = (t) =>
-  typeof t === 'string' && /^\w{1,64}$/.test(t) && !INTERNAL_TABLES.includes(t.toLowerCase());
+const validTable = (t, role) => {
+  if (typeof t !== 'string' || !/^\w{1,64}$/.test(t)) return false;
+  const isInternal = INTERNAL_TABLES.includes(t.toLowerCase());
+  if (isInternal && role !== 'admin') return false;
+  return true;
+};
 
-// GET /api/pg/tables  – list all user tables in the connected DB (excluding internal auth tables)
-app.get('/api/pg/tables', async (_req, res) => {
+// GET /api/pg/tables  – list all user tables in the connected DB (portal_users restricted to admin)
+app.get('/api/pg/tables', async (req, res) => {
+  const isAdmin = req.session?.user?.role === 'admin';
   try {
+    const filterClause = isAdmin ? '' : "AND LOWER(table_name) NOT IN ('portal_users')";
     const { rows } = await pgPool.query(
       `SELECT table_name
          FROM information_schema.tables
         WHERE table_schema = 'public'
           AND table_type   = 'BASE TABLE'
-          AND LOWER(table_name) NOT IN ('portal_users')
+          ${filterClause}
         ORDER BY table_name`
     );
     res.json({ tables: rows.map((r) => r.table_name) });
@@ -1088,7 +1094,17 @@ async function getTableMetadata(pool, table) {
 // GET /api/pg/rows?table=xxx&limit=100&dateFrom=...&dateTo=...&datePreset=...
 app.get('/api/pg/rows', async (req, res) => {
   const table = req.query.table;
-  if (!validTable(table)) return res.status(400).json({ error: 'Invalid table name' });
+  const userRole = req.session?.user?.role;
+  const isAdmin = userRole === 'admin';
+
+  if (!table || typeof table !== 'string') return res.status(400).json({ error: 'Missing table parameter' });
+
+  // Only admins can query portal_users
+  if (INTERNAL_TABLES.includes(table.toLowerCase()) && !isAdmin) {
+    return res.status(403).json({ error: 'Access forbidden: Administrator privileges required to view internal user accounts' });
+  }
+
+  if (!validTable(table, userRole)) return res.status(400).json({ error: 'Invalid table name' });
 
   // Default to 100 records as requested
   const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 500);
@@ -1165,11 +1181,16 @@ app.get('/api/pg/rows', async (req, res) => {
       } catch (_) {}
     }
 
-    const query = `SELECT * FROM "${table}" ${whereSql} ORDER BY ${meta.orderClause} LIMIT ${limitPlaceholder}`;
+    // Mask sensitive fields if querying portal_users
+    let selectFields = '*';
+    if (table.toLowerCase() === 'portal_users') {
+      selectFields = `id, username, email, '••••••••' AS password_hash, role, CASE WHEN totp_secret IS NOT NULL THEN 'Configured' ELSE 'None' END AS totp_secret, totp_enabled, created_at`;
+    }
+
+    const query = `SELECT ${selectFields} FROM "${table}" ${whereSql} ORDER BY ${meta.orderClause} LIMIT ${limitPlaceholder}`;
     const { rows } = await pgPool.query(query, params);
 
     res.json({
-
       rows,
       orderClause: meta.orderClause,
       dateColumn: meta.dateColumn?.name || null,
@@ -1254,7 +1275,17 @@ app.get('/api/pg/file', async (req, res) => {
 // Requires a trigger on the table. If missing, we auto-create it.
 app.get('/api/pg/stream', async (req, res) => {
   const table = req.query.table;
-  if (!validTable(table)) return res.status(400).json({ error: 'Invalid table name' });
+  const userRole = req.session?.user?.role;
+  const isAdmin = userRole === 'admin';
+
+  if (!table || typeof table !== 'string') return res.status(400).json({ error: 'Missing table parameter' });
+
+  // Only admins can stream portal_users
+  if (INTERNAL_TABLES.includes(table.toLowerCase()) && !isAdmin) {
+    return res.status(403).json({ error: 'Access forbidden: Administrator privileges required to monitor user accounts' });
+  }
+
+  if (!validTable(table, userRole)) return res.status(400).json({ error: 'Invalid table name' });
 
   res.set({
     'Content-Type':  'text/event-stream',
@@ -1297,7 +1328,11 @@ app.get('/api/pg/stream', async (req, res) => {
     // Push new rows as SSE events
     client.on('notification', (msg) => {
       try {
-        const row = JSON.parse(msg.payload);
+        let row = JSON.parse(msg.payload);
+        if (table.toLowerCase() === 'portal_users' && row) {
+          row.password_hash = '••••••••';
+          row.totp_secret = row.totp_secret ? 'Configured' : 'None';
+        }
         res.write(`data: ${JSON.stringify({ type: 'insert', row })}\n\n`);
       } catch (_) {}
     });
