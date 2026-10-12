@@ -319,42 +319,107 @@ function MediaCell({ col, val, rowIndex, onPreview, onDownload }) {
   return <span>{str}</span>;
 }
 
-/* ── Results Table ── */
-function MonitorTable({ rows, newIds, onPreview, onDownload }) {
+/* ── Results Table & Responsive Card View ── */
+function MonitorTable({
+  rows,
+  newIds,
+  onPreview,
+  onDownload,
+  sortCol,
+  sortDir,
+  onSort,
+  startIndex = 0,
+}) {
   if (!rows || rows.length === 0) return null;
   const columns = Object.keys(rows[0]);
 
   return (
-    <div className="lm-table-scroll">
-      <table className="lm-table">
-        <thead>
-          <tr>
-            <th className="lm-th-idx">#</th>
-            {columns.map((c) => (
-              <th key={c}>{toLabel(c)}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row, i) => (
-            <tr key={i} className={newIds.has(i) ? 'lm-row-new' : ''}>
-              <td className="lm-td-idx">{i + 1}</td>
+    <>
+      {/* Desktop / Tablet Table with Sticky Header & Pinned First Col */}
+      <div className="lm-table-scroll" role="region" aria-label="Database Records Table" tabIndex={0}>
+        <table className="lm-table">
+          <thead>
+            <tr>
+              <th className="lm-th-idx">#</th>
               {columns.map((c) => (
-                <td key={c}>
-                  <MediaCell
-                    col={c}
-                    val={row[c]}
-                    rowIndex={i}
-                    onPreview={onPreview}
-                    onDownload={onDownload}
-                  />
-                </td>
+                <th
+                  key={c}
+                  className="lm-th-sortable"
+                  onClick={() => onSort(c)}
+                  title={`Sort by ${toLabel(c)}`}
+                  tabIndex={0}
+                  onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && onSort(c)}
+                >
+                  <div className="lm-th-inner">
+                    <span>{toLabel(c)}</span>
+                    <span className="lm-sort-indicator">
+                      {sortCol === c ? (sortDir === 'asc' ? '▲' : '▼') : '⇅'}
+                    </span>
+                  </div>
+                </th>
               ))}
             </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+          </thead>
+          <tbody>
+            {rows.map((row, i) => (
+              <tr key={i} className={newIds.has(i) ? 'lm-row-new' : ''}>
+                <td className="lm-td-idx">{startIndex + i + 1}</td>
+                {columns.map((c) => (
+                  <td key={c}>
+                    <MediaCell
+                      col={c}
+                      val={row[c]}
+                      rowIndex={startIndex + i}
+                      onPreview={onPreview}
+                      onDownload={onDownload}
+                    />
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Mobile Stacked Card View (Under 640px) */}
+      <div className="lm-mobile-cards" role="region" aria-label="Database Records Cards">
+        {rows.map((row, i) => (
+          <div key={i} className={`lm-mobile-card ${newIds.has(i) ? 'lm-row-new' : ''}`}>
+            <div className="lm-card-top-row">
+              <span className="lm-card-index">#{startIndex + i + 1}</span>
+              {row.status && (
+                <MediaCell
+                  col="status"
+                  val={row.status}
+                  rowIndex={startIndex + i}
+                  onPreview={onPreview}
+                  onDownload={onDownload}
+                />
+              )}
+            </div>
+            <div className="lm-card-body-grid">
+              {columns.map((c) => {
+                if (c.toLowerCase() === 'status') return null;
+                return (
+                  <div key={c} className="lm-card-field">
+                    <span className="lm-card-label">{toLabel(c)}</span>
+                    <div className="lm-card-val">
+                      <MediaCell
+                        col={c}
+                        val={row[c]}
+                        rowIndex={startIndex + i}
+                        onPreview={onPreview}
+                        onDownload={onDownload}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+    </>
   );
 }
 
@@ -387,6 +452,11 @@ export default function LiveMonitor() {
   /* ── Table search filter ── */
   const [searchQuery, setSearchQuery] = useState('');
 
+  /* ── Sorting & Pagination State ── */
+  const [sortCol, setSortCol]       = useState(null);
+  const [sortDir, setSortDir]       = useState('asc'); // 'asc' | 'desc'
+  const [page, setPage]             = useState(1);
+  const [pageSize, setPageSize]     = useState(25);
 
   /* ── Modal preview state ── */
   const [activeMedia, setActiveMedia] = useState(null);
@@ -564,7 +634,25 @@ export default function LiveMonitor() {
   /* ── Cleanup on unmount ── */
   useEffect(() => () => closeStream(), [closeStream]);
 
-  /* ── Client-side search filtering ── */
+  const handleSort = (col) => {
+    if (sortCol === col) {
+      if (sortDir === 'asc') setSortDir('desc');
+      else {
+        setSortCol(null);
+        setSortDir('asc');
+      }
+    } else {
+      setSortCol(col);
+      setSortDir('asc');
+    }
+  };
+
+  /* ── Reset page on filter changes ── */
+  useEffect(() => {
+    setPage(1);
+  }, [table, searchQuery, statusFilter, dateFrom, dateTo, todayMode]);
+
+  /* ── Client-side search filtering & sorting ── */
   const filteredRows = useMemo(() => {
     if (!searchQuery.trim()) return rows;
     const q = searchQuery.toLowerCase();
@@ -574,6 +662,25 @@ export default function LiveMonitor() {
       )
     );
   }, [rows, searchQuery]);
+
+  const sortedRows = useMemo(() => {
+    if (!sortCol) return filteredRows;
+    return [...filteredRows].sort((a, b) => {
+      const va = a[sortCol];
+      const vb = b[sortCol];
+      if (va === vb) return 0;
+      if (va === null || va === undefined) return 1;
+      if (vb === null || vb === undefined) return -1;
+      const cmp = String(va).localeCompare(String(vb), undefined, { numeric: true });
+      return sortDir === 'asc' ? cmp : -cmp;
+    });
+  }, [filteredRows, sortCol, sortDir]);
+
+  const totalPages = Math.max(1, Math.ceil(sortedRows.length / pageSize));
+  const paginatedRows = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return sortedRows.slice(start, start + pageSize);
+  }, [sortedRows, page, pageSize]);
 
   const busy = loading || refreshing;
 
@@ -879,13 +986,68 @@ export default function LiveMonitor() {
           </div>
         )}
 
-        {hasFetched && !loading && filteredRows.length > 0 && (
-          <MonitorTable
-            rows={filteredRows}
-            newIds={newIds}
-            onPreview={setActiveMedia}
-            onDownload={handleDownloadMedia}
-          />
+        {hasFetched && !loading && sortedRows.length > 0 && (
+          <>
+            <MonitorTable
+              rows={paginatedRows}
+              newIds={newIds}
+              onPreview={setActiveMedia}
+              onDownload={handleDownloadMedia}
+              sortCol={sortCol}
+              sortDir={sortDir}
+              onSort={handleSort}
+              startIndex={(page - 1) * pageSize}
+            />
+
+            {/* Pagination Controls Bar */}
+            <div className="lm-pagination-bar" role="navigation" aria-label="Table pagination">
+              <div className="lm-pagination-left">
+                <span>
+                  Showing <strong>{(page - 1) * pageSize + 1}</strong>–<strong>{Math.min(page * pageSize, sortedRows.length)}</strong> of <strong>{sortedRows.length}</strong> records
+                </span>
+              </div>
+
+              <div className="lm-pagination-controls">
+                <div className="lm-page-size-wrap">
+                  <label htmlFor="lm-page-size" className="lm-page-size-label">Per page:</label>
+                  <select
+                    id="lm-page-size"
+                    value={pageSize}
+                    onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }}
+                    className="lm-page-size-select"
+                  >
+                    <option value={25}>25</option>
+                    <option value={50}>50</option>
+                    <option value={100}>100</option>
+                  </select>
+                </div>
+
+                <div className="lm-pagination-nav">
+                  <button
+                    type="button"
+                    className="lm-btn-page"
+                    onClick={() => setPage((p) => Math.max(1, p - 1))}
+                    disabled={page <= 1}
+                    aria-label="Previous page"
+                  >
+                    ‹ Prev
+                  </button>
+                  <span className="lm-page-indicator">
+                    {page} / {totalPages}
+                  </span>
+                  <button
+                    type="button"
+                    className="lm-btn-page"
+                    onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                    disabled={page >= totalPages}
+                    aria-label="Next page"
+                  >
+                    Next ›
+                  </button>
+                </div>
+              </div>
+            </div>
+          </>
         )}
       </div>
 

@@ -8,7 +8,7 @@
   align-items: center;
   justify-content: center;
   background: var(--bg);
-  padding: 24px;
+  padding: calc(20px + var(--safe-top)) calc(16px + var(--safe-right)) calc(20px + var(--safe-bottom)) calc(16px + var(--safe-left));
 }
 
 .lp-card {
@@ -16,15 +16,79 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-md);
-  padding: 38px 34px 28px;
+  padding: 34px 30px 26px;
   width: 100%;
-  max-width: 420px;
+  max-width: 430px;
   display: flex;
   flex-direction: column;
+  transition: transform var(--transition), box-shadow var(--transition);
 }
 
 .lp-card--2fa {
-  max-width: 440px;
+  max-width: 450px;
+}
+
+/* ── 2-Step Progress Stepper ── */
+.lp-stepper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin-bottom: 22px;
+  padding: 0 10px;
+}
+
+.lp-step {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink-4);
+  transition: color var(--transition);
+}
+
+.lp-step-num {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--surface-alt);
+  border: 1.5px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  color: var(--ink-3);
+  font-weight: 700;
+  transition: all var(--transition);
+}
+
+.lp-step--active {
+  color: var(--ink);
+}
+
+.lp-step--active .lp-step-num {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  box-shadow: 0 0 0 3px rgba(37,99,235,.15);
+}
+
+.lp-step--done {
+  color: var(--ok);
+}
+
+.lp-step--done .lp-step-num {
+  background: var(--ok-light);
+  border-color: var(--ok);
+  color: var(--ok);
+}
+
+.lp-step-line {
+  flex: 1;
+  height: 2px;
+  background: var(--border);
+  max-width: 40px;
 }
 
 /* ── Brand ── */
@@ -33,13 +97,13 @@
   flex-direction: column;
   align-items: center;
   gap: 8px;
-  margin-bottom: 24px;
+  margin-bottom: 22px;
   text-align: center;
 }
 
 .lp-brand-icon {
-  width: 58px;
-  height: 58px;
+  width: 56px;
+  height: 56px;
   border-radius: 16px;
   background: var(--accent-light);
   color: var(--accent);
@@ -73,9 +137,10 @@
   font-size: 13px;
   color: var(--ink-3);
   margin: 0;
+  line-height: 1.4;
 }
 
-/* ── Mode Toggle Tabs (Sign In vs Create Account) ── */
+/* ── Mode Toggle Tabs ── */
 .lp-mode-tabs {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -84,14 +149,15 @@
   padding: 4px;
   border-radius: var(--radius-md);
   border: 1px solid var(--border);
-  margin-bottom: 20px;
+  margin-bottom: 18px;
 }
 
 .lp-mode-tab {
   font: inherit;
   font-size: 13px;
   font-weight: 600;
-  padding: 8px 14px;
+  padding: 9px 14px;
+  min-height: 44px;
   border-radius: var(--radius-sm);
   border: none;
   background: none;
@@ -99,6 +165,7 @@
   cursor: pointer;
   transition: all 150ms ease;
   text-align: center;
+  white-space: nowrap;
 }
 
 .lp-mode-tab--active {
@@ -109,7 +176,6 @@
 
 /* ── 2FA Method Tabs ── */
 .lp-2fa-tabs {
-
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 6px;
@@ -128,13 +194,15 @@
   font: inherit;
   font-size: 12.5px;
   font-weight: 600;
-  padding: 8px 12px;
+  padding: 9px 12px;
+  min-height: 44px;
   border-radius: var(--radius-sm);
   border: none;
   background: none;
   color: var(--ink-3);
   cursor: pointer;
   transition: all 150ms ease;
+  white-space: nowrap;
 }
 
 .lp-2fa-tab--active {
@@ -154,6 +222,117 @@
   color: var(--ink-2);
   line-height: 1.5;
   margin: 0 0 6px;
+}
+
+/* ── 6-Box Segmented OTP Inputs ── */
+.lp-otp-boxes {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  margin: 6px 0;
+}
+
+.lp-otp-box {
+  width: calc((100% - 40px) / 6);
+  height: 52px;
+  border-radius: var(--radius-sm);
+  border: 1.5px solid var(--border);
+  background: var(--surface-alt);
+  color: var(--ink);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 22px;
+  font-weight: 700;
+  text-align: center;
+  outline: none;
+  transition: border-color var(--transition), box-shadow var(--transition), transform var(--transition);
+}
+
+.lp-otp-box:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(37,99,235,.15);
+  transform: translateY(-1px);
+  background: var(--surface);
+}
+
+.lp-otp-box--filled {
+  border-color: var(--ink-4);
+  background: var(--surface);
+}
+
+/* ── Password Field, Show/Hide & Caps Warning ── */
+.lp-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.lp-caps-badge {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--warn);
+  background: var(--warn-light);
+  border: 1px solid var(--warn-border);
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+
+.lp-password-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+
+.lp-input--password {
+  padding-right: 42px !important;
+}
+
+.lp-eye-btn {
+  position: absolute;
+  right: 10px;
+  background: none;
+  border: none;
+  color: var(--ink-3);
+  cursor: pointer;
+  padding: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  transition: color var(--transition);
+}
+
+.lp-eye-btn:hover {
+  color: var(--ink);
+}
+
+/* ── Password Strength Bar ── */
+.lp-strength-box {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.lp-strength-bar {
+  height: 4px;
+  background: var(--border);
+  border-radius: 999px;
+  overflow: hidden;
+  width: 100%;
+}
+
+.lp-strength-fill {
+  height: 100%;
+  transition: width 200ms ease, background 200ms ease;
+  border-radius: 999px;
+}
+
+.lp-strength-text {
+  font-size: 11px;
+  font-weight: 600;
 }
 
 /* ── QR Code Setup Box ── */
@@ -223,16 +402,6 @@
   user-select: all;
 }
 
-/* ── Code Input Style (Large Digit Box) ── */
-.lp-input--code {
-  font-size: 24px !important;
-  font-weight: 700;
-  letter-spacing: 12px;
-  text-align: center;
-  padding: 10px 14px !important;
-  font-family: monospace;
-}
-
 /* ── Form & Inputs ── */
 .lp-form {
   display: flex;
@@ -254,8 +423,9 @@
 
 .lp-input {
   font: inherit;
-  font-size: 14px;
-  padding: 10px 13px;
+  font-size: 16px; /* 16px prevents mobile browser zoom */
+  padding: 11px 13px;
+  min-height: 44px;
   border: 1.5px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--surface-alt);
@@ -268,7 +438,7 @@
 
 .lp-input:focus {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(37,99,235,.12);
+  box-shadow: 0 0 0 3px rgba(37,99,235,.15);
 }
 
 .lp-input:disabled {
@@ -281,7 +451,8 @@
   font: inherit;
   font-size: 14px;
   font-weight: 600;
-  padding: 11px 18px;
+  padding: 12px 18px;
+  min-height: 44px;
   background: var(--accent);
   color: #fff;
   border: none;
@@ -309,13 +480,18 @@
   font: inherit;
   font-size: 13px;
   font-weight: 600;
-  padding: 8px 14px;
+  padding: 10px 14px;
+  min-height: 44px;
   background: var(--surface);
   color: var(--ink-2);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   cursor: pointer;
   transition: all 150ms ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
 }
 
 .lp-secondary-btn:hover:not(:disabled) {
@@ -326,19 +502,22 @@
 
 .lp-email-send-btn {
   width: 100%;
-  padding: 10px;
 }
 
 .lp-back-btn {
   font: inherit;
-  font-size: 12px;
+  font-size: 13px;
+  font-weight: 500;
   color: var(--ink-3);
   background: none;
   border: none;
   cursor: pointer;
-  padding: 8px;
-  margin-top: 10px;
-  text-align: center;
+  padding: 10px;
+  margin-top: 6px;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   transition: color 150ms ease;
 }
 
@@ -348,23 +527,25 @@
 
 /* ── Banners ── */
 .lp-error-banner {
-  font-size: 12.5px;
+  font-size: 13px;
   color: var(--danger);
   background: var(--danger-light);
   border: 1px solid var(--danger-border);
   border-radius: var(--radius-sm);
-  padding: 9px 13px;
+  padding: 10px 14px;
   margin-bottom: 12px;
+  line-height: 1.4;
 }
 
 .lp-success-banner {
-  font-size: 12.5px;
+  font-size: 13px;
   color: var(--ok);
   background: var(--ok-light);
   border: 1px solid var(--ok-border);
   border-radius: var(--radius-sm);
-  padding: 9px 13px;
-  margin-bottom: 4px;
+  padding: 10px 14px;
+  margin-bottom: 6px;
+  line-height: 1.4;
 }
 
 /* ── Info Box ── */
@@ -409,6 +590,23 @@
   font-size: 11px;
   color: var(--ink-4);
   text-align: center;
-  margin-top: 20px;
+  margin-top: 18px;
   margin-bottom: 0;
+}
+
+/* ── Mobile responsiveness under 480px ── */
+@media (max-width: 480px) {
+  .lp-card {
+    padding: 24px 18px 20px;
+    border-radius: var(--radius-md);
+  }
+
+  .lp-otp-box {
+    height: 48px;
+    font-size: 20px;
+  }
+
+  .lp-title {
+    font-size: 19px;
+  }
 }

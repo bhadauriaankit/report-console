@@ -302,10 +302,11 @@ function createRateLimiter({ windowMs = 60 * 1000, max = 5, message = 'Too many 
 }
 
 // Rate limiter instances for auth endpoints
-const loginRateLimiter   = createRateLimiter({ windowMs: 5 * 60 * 1000, max: 10, message: 'Too many login attempts. Please wait 5 minutes before trying again.' });
-const registerRateLimiter = createRateLimiter({ windowMs: 10 * 60 * 1000, max: 5, message: 'Too many account registrations. Please try again later.' });
-const otpSendRateLimiter = createRateLimiter({ windowMs: 2 * 60 * 1000, max: 3, message: 'Too many OTP requests. Please wait 2 minutes.' });
+const loginRateLimiter     = createRateLimiter({ windowMs: 5 * 60 * 1000, max: 10, message: 'Too many login attempts. Please wait 5 minutes before trying again.' });
+const registerRateLimiter  = createRateLimiter({ windowMs: 10 * 60 * 1000, max: 5, message: 'Too many account registrations. Please try again later.' });
+const otpSendRateLimiter   = createRateLimiter({ windowMs: 2 * 60 * 1000, max: 3, message: 'Too many OTP requests. Please wait 2 minutes.' });
 const otpVerifyRateLimiter = createRateLimiter({ windowMs: 5 * 60 * 1000, max: 10, message: 'Too many verification attempts. Please wait before trying again.' });
+const otpVerifyLimiter     = otpVerifyRateLimiter;
 
 // Azure AD / Microsoft login config
 const AZURE_CLIENT_ID     = process.env.AZURE_CLIENT_ID     || '';

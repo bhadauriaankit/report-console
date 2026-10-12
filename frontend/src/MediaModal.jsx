@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { getPgFileUrl } from './api.js';
 
 /* ── Icons ── */
@@ -41,16 +41,56 @@ const IconEye = () => (
 );
 
 export default function MediaModal({ media, onClose, onDownload }) {
-  const [tab, setTab] = useState('visual'); // 'visual' | 'code'
-  const [fullscreen, setFullscreen] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [tab, setTab]                 = useState('visual'); // 'visual' | 'code'
+  const [fullscreen, setFullscreen]   = useState(false);
+  const [copied, setCopied]           = useState(false);
   const [fetchedCode, setFetchedCode] = useState('');
   const [loadingCode, setLoadingCode] = useState(false);
+  const [imgError, setImgError]       = useState(false);
 
+  const modalRef = useRef(null);
+  const previousFocusRef = useRef(null);
+
+  // Focus restoration: save previous active element and restore on unmount
+  useEffect(() => {
+    previousFocusRef.current = document.activeElement;
+    return () => {
+      if (previousFocusRef.current && typeof previousFocusRef.current.focus === 'function') {
+        previousFocusRef.current.focus();
+      }
+    };
+  }, []);
+
+  // Focus trap inside the modal + Esc key handler
   useEffect(() => {
     const handleKey = (e) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape') {
+        onClose();
+        return;
+      }
+
+      if (e.key === 'Tab' && modalRef.current) {
+        const focusableElements = modalRef.current.querySelectorAll(
+          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+        );
+        if (focusableElements.length === 0) return;
+        const first = focusableElements[0];
+        const last = focusableElements[focusableElements.length - 1];
+
+        if (e.shiftKey) {
+          if (document.activeElement === first) {
+            e.preventDefault();
+            last.focus();
+          }
+        } else {
+          if (document.activeElement === last) {
+            e.preventDefault();
+            first.focus();
+          }
+        }
+      }
     };
+
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
   }, [onClose]);
@@ -59,7 +99,12 @@ export default function MediaModal({ media, onClose, onDownload }) {
 
   const { title, kind, type, content, dataUri, url, path, filename } = media;
 
-  // Compute preview source URL if applicable
+  // Determine if content is audio
+  const isAudio =
+    type === 'audio' ||
+    /\.(mp3|wav|ogg|m4a|aac)(\?|$)/i.test(filename || path || url || '');
+
+  // Compute preview source URL
   let previewSrc = null;
   if (kind === 'data-uri' || kind === 'base64') {
     previewSrc = dataUri;
@@ -69,7 +114,7 @@ export default function MediaModal({ media, onClose, onDownload }) {
     previewSrc = getPgFileUrl(path, false);
   }
 
-  // Fetch raw HTML text if media is path-based and user switches to 'code' tab
+  // Fetch raw HTML text if path-based and user inspects 'code' tab
   useEffect(() => {
     if (type === 'html' && !content && previewSrc && tab === 'code' && !fetchedCode) {
       setLoadingCode(true);
@@ -92,10 +137,18 @@ export default function MediaModal({ media, onClose, onDownload }) {
   };
 
   return (
-    <div className="lm-modal-backdrop" onClick={onClose} role="dialog" aria-modal="true">
+    <div
+      className="lm-modal-backdrop"
+      onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="lm-modal-title"
+    >
       <div
+        ref={modalRef}
         className={`lm-modal-window ${fullscreen ? 'lm-modal-fullscreen' : ''}`}
         onClick={(e) => e.stopPropagation()}
+        tabIndex={-1}
       >
         {/* Header */}
         <div className="lm-modal-header">
@@ -103,14 +156,18 @@ export default function MediaModal({ media, onClose, onDownload }) {
             <span className={`lm-type-badge lm-type-${type || 'file'}`}>
               {(type || 'file').toUpperCase()}
             </span>
-            <div className="lm-modal-title">{title || filename || 'Media Preview'}</div>
+            <div id="lm-modal-title" className="lm-modal-title">
+              {title || filename || 'Media Preview'}
+            </div>
           </div>
 
           <div className="lm-modal-actions">
             {type === 'html' && (
-              <div className="lm-modal-tabs">
+              <div className="lm-modal-tabs" role="tablist" aria-label="Preview Mode">
                 <button
                   type="button"
+                  role="tab"
+                  aria-selected={tab === 'visual'}
                   className={`lm-modal-tab ${tab === 'visual' ? 'lm-modal-tab--active' : ''}`}
                   onClick={() => setTab('visual')}
                 >
@@ -118,6 +175,8 @@ export default function MediaModal({ media, onClose, onDownload }) {
                 </button>
                 <button
                   type="button"
+                  role="tab"
+                  aria-selected={tab === 'code'}
                   className={`lm-modal-tab ${tab === 'code' ? 'lm-modal-tab--active' : ''}`}
                   onClick={() => setTab('code')}
                 >
@@ -132,6 +191,7 @@ export default function MediaModal({ media, onClose, onDownload }) {
                 className="lm-modal-btn lm-modal-btn-download"
                 onClick={() => onDownload(media)}
                 title="Download file"
+                aria-label="Download file"
               >
                 <IconDownload />
                 <span>Download</span>
@@ -143,6 +203,7 @@ export default function MediaModal({ media, onClose, onDownload }) {
               className="lm-modal-btn"
               onClick={() => setFullscreen((f) => !f)}
               title={fullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
+              aria-label={fullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
             >
               <IconMaximize />
             </button>
@@ -152,6 +213,7 @@ export default function MediaModal({ media, onClose, onDownload }) {
               className="lm-modal-btn lm-modal-btn-close"
               onClick={onClose}
               title="Close (Esc)"
+              aria-label="Close dialog"
             >
               <IconX />
             </button>
@@ -203,8 +265,19 @@ export default function MediaModal({ media, onClose, onDownload }) {
             </div>
           )}
 
+          {/* Audio Player Preview */}
+          {isAudio && previewSrc && (
+            <div className="lm-audio-wrapper">
+              <div className="lm-audio-icon" aria-hidden="true">🎵</div>
+              <h3 className="lm-audio-title">{filename || 'Audio Media'}</h3>
+              <audio controls src={previewSrc} className="lm-audio-player" aria-label="Audio file playback">
+                Your browser does not support HTML5 audio playback.
+              </audio>
+            </div>
+          )}
+
           {/* PDF Preview */}
-          {type === 'pdf' && previewSrc && (
+          {type === 'pdf' && previewSrc && !isAudio && (
             <iframe
               title="PDF Preview"
               src={previewSrc}
@@ -213,14 +286,25 @@ export default function MediaModal({ media, onClose, onDownload }) {
           )}
 
           {/* Image Preview */}
-          {type === 'image' && previewSrc && (
+          {type === 'image' && previewSrc && !isAudio && (
             <div className="lm-image-wrapper">
-              <img src={previewSrc} alt={filename || 'Attachment'} className="lm-preview-img" />
+              {imgError ? (
+                <div className="lm-placeholder lm-empty" role="alert">
+                  Failed to load image preview. Use the download button above.
+                </div>
+              ) : (
+                <img
+                  src={previewSrc}
+                  alt={filename || 'Attachment'}
+                  className="lm-preview-img"
+                  onError={() => setImgError(true)}
+                />
+              )}
             </div>
           )}
 
           {/* Text preview */}
-          {type === 'text' && (content || activeSource) && (
+          {type === 'text' && (content || activeSource) && !isAudio && (
             <div className="lm-code-container">
               <pre className="lm-code-pre">
                 <code>{content || activeSource}</code>
@@ -228,8 +312,8 @@ export default function MediaModal({ media, onClose, onDownload }) {
             </div>
           )}
 
-          {/* Fallback for binary / path where direct inline preview is not supported */}
-          {type !== 'html' && type !== 'pdf' && type !== 'image' && !content && (
+          {/* Fallback for other file types */}
+          {type !== 'html' && type !== 'pdf' && type !== 'image' && !isAudio && !content && (
             <div className="lm-binary-fallback">
               <div className="lm-binary-icon">📎</div>
               <h3>Attachment Available for Download</h3>
