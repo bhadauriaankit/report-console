@@ -1436,6 +1436,17 @@ app.get('/api/pg/stream', async (req, res) => {
   }
 });
 
+// Serve frontend dist static files if built
+const frontendDist = path.resolve('../frontend/dist');
+if (fs.existsSync(frontendDist)) {
+  app.use(express.static(frontendDist));
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api') || req.path.startsWith('/health')) return next();
+    res.sendFile(path.join(frontendDist, 'index.html'));
+  });
+}
+
+
 app.listen(PORT, () => {
   const sftpConfig = getSftpConfig();
   console.log(`Report backend listening on http://localhost:${PORT}`);
