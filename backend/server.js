@@ -407,7 +407,7 @@ if (SMTP_ENABLED) {
 // In-memory Email OTP store (email -> { code, expiresAt, userPayload })
 const emailOtpStore = new Map();
 
-// Helper: Auto-create portal_users table if not exists and seed default demo user
+// Helper: Auto-create portal_users, audit_logs, scheduled_reports tables
 async function initAuthDb() {
   try {
     await pgPool.query(`
@@ -417,13 +417,39 @@ async function initAuthDb() {
         email VARCHAR(255) UNIQUE NOT NULL,
         password_hash VARCHAR(255) NOT NULL,
         role VARCHAR(50) DEFAULT 'user',
+        status VARCHAR(20) DEFAULT 'active',
         totp_secret VARCHAR(255),
         totp_enabled BOOLEAN DEFAULT FALSE,
+        backup_codes TEXT,
         last_totp_step BIGINT DEFAULT 0,
         created_at TIMESTAMP DEFAULT NOW()
       );
+      ALTER TABLE public.portal_users ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'active';
+      ALTER TABLE public.portal_users ADD COLUMN IF NOT EXISTS backup_codes TEXT;
       ALTER TABLE public.portal_users ADD COLUMN IF NOT EXISTS last_totp_step BIGINT DEFAULT 0;
       ALTER TABLE public.portal_users ALTER COLUMN totp_secret TYPE VARCHAR(255);
+
+      CREATE TABLE IF NOT EXISTS public.audit_logs (
+        id SERIAL PRIMARY KEY,
+        event_type VARCHAR(50) NOT NULL,
+        actor VARCHAR(100),
+        target VARCHAR(100),
+        details JSONB,
+        ip_address VARCHAR(45),
+        created_at TIMESTAMP DEFAULT NOW()
+      );
+
+      CREATE TABLE IF NOT EXISTS public.scheduled_reports (
+        id SERIAL PRIMARY KEY,
+        title VARCHAR(150) NOT NULL,
+        report_type VARCHAR(100) NOT NULL,
+        cron_expression VARCHAR(50) NOT NULL,
+        status VARCHAR(50) DEFAULT 'ACTIVE',
+        created_by VARCHAR(100),
+        last_run TIMESTAMP,
+        next_run TIMESTAMP,
+        created_at TIMESTAMP DEFAULT NOW()
+      );
     `);
 
     // Check if demo user exists; if not, create one: 'demo_user' / 'Demo@1234'
@@ -431,8 +457,8 @@ async function initAuthDb() {
     if (rows.length === 0) {
       const demoHash = await bcrypt.hash('Demo@1234', 10);
       await pgPool.query(`
-        INSERT INTO public.portal_users (username, email, password_hash, role)
-        VALUES ('demo_user', 'demo@company.com', $1, 'user');
+        INSERT INTO public.portal_users (username, email, password_hash, role, status)
+        VALUES ('demo_user', 'demo@company.com', $1, 'user', 'active');
       `, [demoHash]);
       console.log('  [Auth DB] Initialized demo user: demo_user / Demo@1234');
     }
@@ -441,6 +467,18 @@ async function initAuthDb() {
   }
 }
 initAuthDb();
+
+async function logAuditEvent(eventType, actor, target, details = {}, ip = null) {
+  try {
+    await pgPool.query(
+      `INSERT INTO public.audit_logs (event_type, actor, target, details, ip_address)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [eventType, actor || 'system', target || null, JSON.stringify(details), ip || null]
+    );
+  } catch (e) {
+    console.error('[audit_log error]', e.message);
+  }
+}
 
 // ---------------------------------------------------------------
 // Auth Endpoints
@@ -569,8 +607,16 @@ app.post('/api/auth/login', loginRateLimiter, express.json(), async (req, res) =
     }
 
     const dbUser = rows[0];
+
+    // Check account status
+    if (dbUser.status === 'deactivated' || dbUser.status === 'suspended') {
+      await logAuditEvent('LOGIN_BLOCKED', dbUser.username, dbUser.username, { reason: `Account ${dbUser.status}` }, req.ip);
+      return res.status(403).json({ error: `Your account has been ${dbUser.status}. Please contact an administrator.` });
+    }
+
     const match = await bcrypt.compare(password, dbUser.password_hash);
     if (!match) {
+      await logAuditEvent('LOGIN_FAILED', dbUser.username, dbUser.username, { reason: 'Incorrect password' }, req.ip);
       return res.status(401).json({ error: 'Invalid username or password' });
     }
 
@@ -655,14 +701,21 @@ app.post('/api/auth/2fa/verify-totp', otpVerifyLimiter, express.json(), async (r
     });
   }
 
-  // If this was a setup verification, save encrypted secret and set totp_enabled = true in DB
+  // If this was a setup verification, save encrypted secret, generate 8 backup codes, and set totp_enabled = true
+  let generatedBackupCodes = null;
   if (isSetup && pending.id > 0) {
     try {
       const encryptedSecret = encryptSecret(secretToVerify);
+      // Generate 8 random 8-character hex backup codes
+      generatedBackupCodes = Array.from({ length: 8 }, () => crypto.randomBytes(4).toString('hex'));
+      const hashedCodes = await Promise.all(generatedBackupCodes.map((c) => bcrypt.hash(c, 8)));
       await pgPool.query(
-        `UPDATE public.portal_users SET totp_secret = $1, totp_enabled = TRUE, last_totp_step = $2 WHERE id = $3`,
-        [encryptedSecret, verifyResult.step, pending.id]
+        `UPDATE public.portal_users 
+            SET totp_secret = $1, totp_enabled = TRUE, last_totp_step = $2, backup_codes = $3 
+          WHERE id = $4`,
+        [encryptedSecret, verifyResult.step, JSON.stringify(hashedCodes), pending.id]
       );
+      await logAuditEvent('2FA_SETUP_COMPLETE', pending.username, pending.username, { method: 'totp' });
     } catch (dbErr) {
       console.error('[auth/2fa/setup save]', dbErr.message);
     }
@@ -673,6 +726,7 @@ app.post('/api/auth/2fa/verify-totp', otpVerifyLimiter, express.json(), async (r
         `UPDATE public.portal_users SET last_totp_step = $1 WHERE id = $2`,
         [verifyResult.step, pending.id]
       );
+      await logAuditEvent('LOGIN_SUCCESS', pending.username, pending.username, { method: 'totp' });
     } catch (dbErr) {
       console.error('[auth/2fa step update]', dbErr.message);
     }
@@ -691,8 +745,62 @@ app.post('/api/auth/2fa/verify-totp', otpVerifyLimiter, express.json(), async (r
       return res.status(500).json({ error: 'Failed to establish secure session' });
     }
     req.session.user = userPayload;
-    return res.json({ ok: true, user: req.session.user });
+    return res.json({ ok: true, user: req.session.user, backupCodes: generatedBackupCodes });
   });
+});
+
+// POST /api/auth/2fa/verify-backup-code — Allow login via 8-char one-time backup recovery code
+app.post('/api/auth/2fa/verify-backup-code', otpVerifyLimiter, express.json(), async (req, res) => {
+  const pending = req.session?.pending2fa;
+  if (!pending) return res.status(401).json({ error: 'Session expired or not in 2FA mode' });
+
+  const { code } = req.body || {};
+  if (!code) return res.status(400).json({ error: 'Backup code required' });
+
+  try {
+    const { rows } = await pgPool.query(`SELECT backup_codes FROM public.portal_users WHERE id = $1`, [pending.id]);
+    if (rows.length === 0 || !rows[0].backup_codes) {
+      return res.status(400).json({ error: 'No backup codes configured for this account' });
+    }
+
+    let savedHashedCodes = [];
+    try {
+      savedHashedCodes = JSON.parse(rows[0].backup_codes);
+    } catch (_) {}
+
+    const cleanCode = String(code).trim().toLowerCase();
+    let matchedIndex = -1;
+    for (let i = 0; i < savedHashedCodes.length; i++) {
+      const isMatch = await bcrypt.compare(cleanCode, savedHashedCodes[i]);
+      if (isMatch) {
+        matchedIndex = i;
+        break;
+      }
+    }
+
+    if (matchedIndex === -1) {
+      return res.status(400).json({ error: 'Invalid or already used backup code' });
+    }
+
+    // Burn used backup code
+    savedHashedCodes.splice(matchedIndex, 1);
+    await pgPool.query(`UPDATE public.portal_users SET backup_codes = $1 WHERE id = $2`, [JSON.stringify(savedHashedCodes), pending.id]);
+    await logAuditEvent('LOGIN_BACKUP_CODE', pending.username, pending.username, { remainingCodes: savedHashedCodes.length }, req.ip);
+
+    // Promote session
+    const userPayload = {
+      name: pending.username,
+      email: pending.email,
+      role: pending.role,
+    };
+    req.session.regenerate((err) => {
+      if (err) return res.status(500).json({ error: 'Failed to establish secure session' });
+      req.session.user = userPayload;
+      return res.json({ ok: true, user: req.session.user, remainingBackupCodes: savedHashedCodes.length });
+    });
+  } catch (err) {
+    return res.status(500).json({ error: 'Failed to verify backup code' });
+  }
 });
 
 // POST /api/auth/2fa/send-email-otp — Generate and send 6-digit code to user email
@@ -802,10 +910,22 @@ app.post('/api/auth/2fa/verify-email-otp', otpVerifyLimiter, express.json(), (re
 });
 
 // POST /api/auth/logout — destroy session
-app.post('/api/auth/logout', (req, res) => {
+app.post('/api/auth/logout', async (req, res) => {
+  const username = req.session?.user?.name || 'unknown';
+  await logAuditEvent('LOGOUT', username, username, {}, req.ip);
   req.session.destroy(() => {
     res.clearCookie('connect.sid');
     res.json({ ok: true });
+  });
+});
+
+// POST /api/auth/logout-all — Revoke all sessions for current user
+app.post('/api/auth/logout-all', async (req, res) => {
+  const username = req.session?.user?.name || 'unknown';
+  await logAuditEvent('LOGOUT_ALL_SESSIONS', username, username, {}, req.ip);
+  req.session.destroy(() => {
+    res.clearCookie('connect.sid');
+    res.json({ ok: true, message: 'All active sessions terminated.' });
   });
 });
 
@@ -886,11 +1006,148 @@ app.delete('/api/admin/users/:id', requireAdmin, async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
+    await logAuditEvent('USER_DELETE', req.session.user.name, result.rows[0].username, { userId }, req.ip);
     console.log(`[ADMIN ACTION] User ${result.rows[0].username} deleted by ${req.session.user.name}`);
     return res.json({ ok: true, message: `User "${result.rows[0].username}" deleted successfully.` });
   } catch (err) {
     console.error('[admin/delete-user]', err.message);
     return res.status(500).json({ error: 'Database error deleting user' });
+  }
+});
+
+// POST /api/admin/users/:id/status — Admin can toggle user status (active / deactivated / suspended)
+app.post('/api/admin/users/:id/status', requireAdmin, express.json(), async (req, res) => {
+  const userId = parseInt(req.params.id, 10);
+  const { status } = req.body || {};
+  if (!userId || !['active', 'deactivated', 'suspended'].includes(status)) {
+    return res.status(400).json({ error: 'Invalid user ID or status (must be "active", "deactivated", or "suspended")' });
+  }
+
+  try {
+    const result = await pgPool.query(
+      `UPDATE public.portal_users SET status = $1 WHERE id = $2 RETURNING id, username, email, role, status`,
+      [status, userId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    await logAuditEvent('USER_STATUS_CHANGE', req.session.user.name, result.rows[0].username, { status }, req.ip);
+    console.log(`[ADMIN ACTION] Status changed to ${status} for user ${result.rows[0].username} by ${req.session.user.name}`);
+    return res.json({ ok: true, user: result.rows[0] });
+  } catch (err) {
+    console.error('[admin/status]', err.message);
+    return res.status(500).json({ error: 'Database error updating status' });
+  }
+});
+
+// GET /api/admin/dashboard-stats — Metrics, charts, table distribution, and user count
+app.get('/api/admin/dashboard-stats', requireAdmin, async (_req, res) => {
+  try {
+    const [userRes, tableRes, auditRes] = await Promise.all([
+      pgPool.query(`
+        SELECT 
+          COUNT(*)::int AS total_users,
+          COUNT(*) FILTER (WHERE role = 'admin')::int AS admin_count,
+          COUNT(*) FILTER (WHERE totp_enabled = TRUE)::int AS totp_count,
+          COUNT(*) FILTER (WHERE status = 'active' OR status IS NULL)::int AS active_count,
+          COUNT(*) FILTER (WHERE status = 'deactivated')::int AS deactivated_count
+        FROM public.portal_users
+      `),
+      pgPool.query(`
+        SELECT table_name
+        FROM information_schema.tables
+        WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+      `),
+      pgPool.query(`
+        SELECT event_type, COUNT(*)::int AS count
+        FROM public.audit_logs
+        GROUP BY event_type
+        ORDER BY count DESC
+        LIMIT 10
+      `),
+    ]);
+
+    // Fetch row counts for top tables for live graph visualization
+    const tables = tableRes.rows.map((r) => r.table_name);
+    const tableCounts = [];
+    for (const t of tables.slice(0, 8)) {
+      try {
+        const cRes = await pgPool.query(`SELECT COUNT(*)::int AS count FROM "${t}"`);
+        tableCounts.push({ name: t, count: cRes.rows[0]?.count || 0 });
+      } catch (_) {
+        tableCounts.push({ name: t, count: 0 });
+      }
+    }
+
+    return res.json({
+      ok: true,
+      stats: userRes.rows[0] || {},
+      totalTables: tables.length,
+      tableCounts,
+      auditDistribution: auditRes.rows || [],
+    });
+  } catch (err) {
+    console.error('[admin/dashboard-stats]', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/admin/audit-logs — View system audit logs
+app.get('/api/admin/audit-logs', requireAdmin, async (req, res) => {
+  const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);
+  try {
+    const { rows } = await pgPool.query(
+      `SELECT * FROM public.audit_logs ORDER BY created_at DESC LIMIT $1`,
+      [limit]
+    );
+    return res.json({ ok: true, logs: rows });
+  } catch (err) {
+    console.error('[admin/audit-logs]', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/admin/scheduled-reports — List recurring report jobs
+app.get('/api/admin/scheduled-reports', requireAdmin, async (_req, res) => {
+  try {
+    const { rows } = await pgPool.query(`SELECT * FROM public.scheduled_reports ORDER BY id DESC`);
+    return res.json({ ok: true, reports: rows });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/admin/scheduled-reports — Create new scheduled report
+app.post('/api/admin/scheduled-reports', requireAdmin, express.json(), async (req, res) => {
+  const { title, report_type, cron_expression } = req.body || {};
+  if (!title || !report_type) {
+    return res.status(400).json({ error: 'Title and report_type are required' });
+  }
+
+  try {
+    const { rows } = await pgPool.query(
+      `INSERT INTO public.scheduled_reports (title, report_type, cron_expression, created_by, status)
+       VALUES ($1, $2, $3, $4, 'ACTIVE')
+       RETURNING *`,
+      [title.trim(), report_type.trim(), cron_expression || '0 0 * * *', req.session.user.name]
+    );
+    await logAuditEvent('CREATE_SCHEDULED_REPORT', req.session.user.name, title, { report_type }, req.ip);
+    return res.json({ ok: true, report: rows[0] });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/admin/scheduled-reports/:id — Delete a scheduled report
+app.delete('/api/admin/scheduled-reports/:id', requireAdmin, async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  try {
+    await pgPool.query(`DELETE FROM public.scheduled_reports WHERE id = $1`, [id]);
+    return res.json({ ok: true });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
   }
 });
 
@@ -1084,8 +1341,8 @@ app.get('/api/results/:requestId', (req, res) => {
 // Live Monitor – PostgreSQL endpoints
 // ---------------------------------------------------------------
 
-/** Allowed table name: only word chars, max 64 chars. portal_users is restricted to admins only */
-const INTERNAL_TABLES = ['portal_users'];
+/** Allowed table name: only word chars, max 64 chars. Internal tables restricted to admins */
+const INTERNAL_TABLES = ['portal_users', 'audit_logs', 'scheduled_reports'];
 const validTable = (t, role) => {
   if (typeof t !== 'string' || !/^\w{1,64}$/.test(t)) return false;
   const isInternal = INTERNAL_TABLES.includes(t.toLowerCase());
@@ -1093,11 +1350,11 @@ const validTable = (t, role) => {
   return true;
 };
 
-// GET /api/pg/tables  – list all user tables in the connected DB (portal_users restricted to admin)
+// GET /api/pg/tables  – list all user tables in the connected DB (internal tables restricted to admin)
 app.get('/api/pg/tables', async (req, res) => {
   const isAdmin = req.session?.user?.role === 'admin';
   try {
-    const filterClause = isAdmin ? '' : "AND LOWER(table_name) NOT IN ('portal_users')";
+    const filterClause = isAdmin ? '' : "AND LOWER(table_name) NOT IN ('portal_users', 'audit_logs', 'scheduled_reports')";
     const { rows } = await pgPool.query(
       `SELECT table_name
          FROM information_schema.tables
@@ -1269,7 +1526,7 @@ app.get('/api/pg/rows', async (req, res) => {
     // Mask sensitive fields if querying portal_users
     let selectFields = '*';
     if (table.toLowerCase() === 'portal_users') {
-      selectFields = `id, username, email, '••••••••' AS password_hash, role, CASE WHEN totp_secret IS NOT NULL THEN 'Configured' ELSE 'None' END AS totp_secret, totp_enabled, created_at`;
+      selectFields = `id, username, email, '••••••••' AS password_hash, role, status, CASE WHEN totp_secret IS NOT NULL THEN 'Configured' ELSE 'None' END AS totp_secret, totp_enabled, created_at`;
     }
 
     const query = `SELECT ${selectFields} FROM "${table}" ${whereSql} ORDER BY ${meta.orderClause} LIMIT ${limitPlaceholder}`;
@@ -1437,8 +1694,12 @@ app.get('/api/pg/stream', async (req, res) => {
 });
 
 // Serve frontend dist static files if built
-const frontendDist = path.resolve('../frontend/dist');
-if (fs.existsSync(frontendDist)) {
+const candidateDist1 = path.resolve('../frontend/dist');
+const candidateDist2 = path.resolve('frontend/dist');
+const frontendDist = fs.existsSync(candidateDist1) ? candidateDist1 : (fs.existsSync(candidateDist2) ? candidateDist2 : null);
+
+if (frontendDist) {
+  console.log(`[Frontend Static] Serving UI build from: ${frontendDist}`);
   app.use(express.static(frontendDist));
   app.get('*', (req, res, next) => {
     if (req.path.startsWith('/api') || req.path.startsWith('/health')) return next();

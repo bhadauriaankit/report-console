@@ -378,6 +378,14 @@ export default function ReportConsole() {
                 >
                   <IconDownload /> Export
                 </button>
+                <button
+                  type="button"
+                  className="rc-btn-export"
+                  onClick={() => window.print()}
+                  title="Print or Save Report as PDF"
+                >
+                  🖨️ Print / PDF
+                </button>
               </div>
             </div>
           )}

@@ -3,14 +3,10 @@ import { createRoot } from 'react-dom/client';
 import ReportConsole from './ReportConsole.jsx';
 import LiveMonitor from './LiveMonitor.jsx';
 import LoginPage from './LoginPage.jsx';
+import AdminDashboard from './AdminDashboard.jsx';
 import { getMe, logout } from './api.js';
 import './styles.css';
 import './LoginPage.css';
-
-const TABS = [
-  { id: 'monitor', label: '🟢 Live Monitor' },
-  { id: 'report',  label: '📊 Scaler Reports' },
-];
 
 /* ── Error Boundary ── */
 class ErrorBoundary extends Component {
@@ -169,7 +165,11 @@ function App() {
 
         {/* Tab bar (centered) */}
         <nav className="app-tabs" role="tablist" aria-label="Portal Navigation">
-          {TABS.map((t) => (
+          {[
+            { id: 'monitor', label: '🟢 Live Monitor' },
+            { id: 'report',  label: '📊 Scaler Reports' },
+            ...(user.role === 'admin' ? [{ id: 'admin', label: '🛡️ Admin Dashboard' }] : []),
+          ].map((t) => (
             <button
               key={t.id}
               role="tab"
@@ -209,6 +209,7 @@ function App() {
         <ErrorBoundary>
           {tab === 'monitor' && <LiveMonitor currentUser={user} />}
           {tab === 'report'  && <ReportConsole />}
+          {tab === 'admin'   && <AdminDashboard currentUser={user} />}
         </ErrorBoundary>
       </main>
 

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
-import { getPgTables, getPgRows, pgStreamUrl, getPgFileUrl, adminResetUser2fa, adminUpdateUserRole, adminDeleteUser } from './api.js';
+import { getPgTables, getPgRows, pgStreamUrl, getPgFileUrl, adminResetUser2fa, adminUpdateUserRole, adminUpdateUserStatus, adminDeleteUser } from './api.js';
 import MediaModal from './MediaModal.jsx';
 import { showToast } from './main.jsx';
 import './LiveMonitor.css';
@@ -216,13 +216,27 @@ function exportCSV(columns, rows, tableName) {
   URL.revokeObjectURL(url);
 }
 
-function exportJSON(rows, tableName) {
-  const json = JSON.stringify(rows, null, 2);
-  const blob = new Blob([json], { type: 'application/json' });
+function exportExcel(columns, rows, tableName) {
+  let tableHtml = `<table border="1"><thead><tr>`;
+  columns.forEach((col) => {
+    tableHtml += `<th style="background-color:#2563eb;color:#ffffff;font-weight:bold;">${toLabel(col)}</th>`;
+  });
+  tableHtml += `</tr></thead><tbody>`;
+  rows.forEach((row) => {
+    tableHtml += `<tr>`;
+    columns.forEach((col) => {
+      const val = row[col] === null || row[col] === undefined ? '' : String(row[col]);
+      tableHtml += `<td>${val.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</td>`;
+    });
+    tableHtml += `</tr>`;
+  });
+  tableHtml += `</tbody></table>`;
+
+  const blob = new Blob([`\ufeff${tableHtml}`], { type: 'application/vnd.ms-excel;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `live_${tableName}_${Date.now()}.json`;
+  a.download = `live_${tableName}_${Date.now()}.xls`;
   a.click();
   URL.revokeObjectURL(url);
 }
@@ -333,6 +347,10 @@ function MonitorTable({
   onInspectRow,
   isAdmin = false,
   tableName = '',
+  onReset2fa,
+  onToggleRole,
+  onToggleStatus,
+  onDeleteUser,
 }) {
   if (!rows || rows.length === 0) return null;
   const columns = Object.keys(rows[0]);
@@ -382,17 +400,68 @@ function MonitorTable({
                   </td>
                 ))}
                 <td className="lm-td-actions">
-                  <button
-                    type="button"
-                    className="lm-btn-row-action"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onInspectRow(row);
-                    }}
-                    title="View full record details"
-                  >
-                    🔍 Inspect
-                  </button>
+                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', justifyContent: 'flex-end' }}>
+                    <button
+                      type="button"
+                      className="lm-btn-row-action"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onInspectRow(row);
+                      }}
+                      title="View full record details"
+                    >
+                      🔍 Inspect
+                    </button>
+
+                    {isPortalUsers && (
+                      <>
+                        <button
+                          type="button"
+                          className="lm-btn-row-action"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onReset2fa?.(row.id, row.username);
+                          }}
+                          title="Reset 2FA for this user"
+                        >
+                          🔄 2FA
+                        </button>
+                        <button
+                          type="button"
+                          className="lm-btn-row-action"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onToggleRole?.(row.id, row.role === 'admin' ? 'user' : 'admin');
+                          }}
+                          title={`Switch role to ${row.role === 'admin' ? 'User' : 'Admin'}`}
+                        >
+                          {row.role === 'admin' ? '👤 Demote' : '👑 Admin'}
+                        </button>
+                        <button
+                          type="button"
+                          className="lm-btn-row-action"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onToggleStatus?.(row.id, row.status || 'active');
+                          }}
+                          title={`Toggle account status (current: ${row.status || 'active'})`}
+                        >
+                          {row.status === 'deactivated' ? '🟢 Activate' : '⛔ Deact'}
+                        </button>
+                        <button
+                          type="button"
+                          className="lm-btn-row-action lm-btn-admin-danger"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onDeleteUser?.(row.id, row.username);
+                          }}
+                          title="Delete user"
+                        >
+                          🗑️
+                        </button>
+                      </>
+                    )}
+                  </div>
                 </td>
               </tr>
             ))}
@@ -531,6 +600,27 @@ export default function LiveMonitor({ currentUser }) {
         }
       } else {
         showToast(res.body?.error || 'Failed to update role', 'error');
+      }
+    } catch (e) {
+      showToast(e.message, 'error');
+    }
+  };
+
+  const handleToggleStatus = async (userId, currentStatus) => {
+    const nextStatus = currentStatus === 'active' ? 'deactivated' : 'active';
+    if (!window.confirm(`Are you sure you want to change user status to "${nextStatus}"?`)) return;
+    try {
+      const res = await adminUpdateUserStatus(userId, nextStatus);
+      if (res.ok) {
+        showToast(`User status set to ${nextStatus}`, 'success');
+        setRows((prev) =>
+          prev.map((r) => (r.id === userId ? { ...r, status: nextStatus } : r))
+        );
+        if (inspectedRow?.id === userId) {
+          setInspectedRow((prev) => ({ ...prev, status: nextStatus }));
+        }
+      } else {
+        showToast(res.body?.error || 'Failed to update status', 'error');
       }
     } catch (e) {
       showToast(e.message, 'error');
@@ -1042,6 +1132,14 @@ export default function LiveMonitor({ currentUser }) {
                   <button
                     type="button"
                     className="lm-btn-export"
+                    onClick={() => exportExcel(Object.keys(rows[0]), rows, table)}
+                    title="Export as Excel"
+                  >
+                    Excel
+                  </button>
+                  <button
+                    type="button"
+                    className="lm-btn-export"
                     onClick={() => exportJSON(rows, table)}
                     title="Export as JSON"
                   >
@@ -1094,6 +1192,10 @@ export default function LiveMonitor({ currentUser }) {
               onInspectRow={(row) => setInspectedRow(row)}
               isAdmin={currentUser?.role === 'admin'}
               tableName={table}
+              onReset2fa={handleReset2fa}
+              onToggleRole={handleToggleRole}
+              onToggleStatus={handleToggleStatus}
+              onDeleteUser={handleDeleteUser}
             />
 
             {/* Pagination Controls Bar */}
@@ -1177,8 +1279,8 @@ export default function LiveMonitor({ currentUser }) {
                 ))}
               </div>
 
-                {/* If inspecting portal_users table as Admin -> Show Management Actions */}
-              {currentUser?.role === 'admin' && table.toLowerCase() === 'portal_users' && inspectedRow.id && (
+                {/* If inspecting portal_users table -> Show Management Actions */}
+              {(table.toLowerCase() === 'portal_users' || (inspectedRow.username && inspectedRow.email && inspectedRow.password_hash)) && inspectedRow.id && (
                 <div className="lm-admin-action-section">
                   <div className="lm-admin-action-title">
                     👑 Administrator User Management
@@ -1200,6 +1302,15 @@ export default function LiveMonitor({ currentUser }) {
                       title={`Change role to ${inspectedRow.role === 'admin' ? 'User' : 'Administrator'}`}
                     >
                       {inspectedRow.role === 'admin' ? '👤 Demote to User' : '👑 Promote to Admin'}
+                    </button>
+
+                    <button
+                      type="button"
+                      className="lm-btn-row-action"
+                      onClick={() => handleToggleStatus(inspectedRow.id, inspectedRow.status || 'active')}
+                      title={`Toggle account status (current: ${inspectedRow.status || 'active'})`}
+                    >
+                      {inspectedRow.status === 'deactivated' ? '🟢 Activate Account' : '⛔ Deactivate Account'}
                     </button>
 
                     <button

@@ -874,3 +874,43 @@
     justify-content: space-between;
   }
 }
+
+/* ── Print & Save as PDF Styling ── */
+@media print {
+  .app-header,
+  .rc-filter-card,
+  .rc-conn-status-bar,
+  .rc-results-header-right,
+  .rc-btn-export,
+  .rc-drawer-overlay,
+  .theme-toggle-btn,
+  .toast-container {
+    display: none !important;
+  }
+
+  body {
+    background: #ffffff !important;
+    color: #000000 !important;
+  }
+
+  .rc-page {
+    padding: 0 !important;
+    max-width: 100% !important;
+  }
+
+  .rc-card {
+    border: none !important;
+    box-shadow: none !important;
+  }
+
+  .rc-table th {
+    background: #f3f4f6 !important;
+    color: #111827 !important;
+    border-bottom: 2px solid #000000 !important;
+  }
+
+  .rc-table td {
+    color: #111827 !important;
+    border-bottom: 1px solid #e5e7eb !important;
+  }
+}

@@ -122,11 +122,54 @@ export const adminUpdateUserRole = (userId, role) =>
     body: JSON.stringify({ role }),
   }).then(json);
 
+export const adminUpdateUserStatus = (userId, status) =>
+  fetch(`${API}/api/admin/users/${encodeURIComponent(userId)}/status`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ status }),
+  }).then(json);
+
 export const adminDeleteUser = (userId) =>
   fetch(`${API}/api/admin/users/${encodeURIComponent(userId)}`, {
     method: 'DELETE',
     credentials: 'include',
   }).then(json);
+
+export const getAdminDashboardStats = () =>
+  fetch(`${API}/api/admin/dashboard-stats`, { credentials: 'include' }).then(json);
+
+export const getAdminAuditLogs = (limit = 50) =>
+  fetch(`${API}/api/admin/audit-logs?limit=${limit}`, { credentials: 'include' }).then(json);
+
+export const getScheduledReports = () =>
+  fetch(`${API}/api/admin/scheduled-reports`, { credentials: 'include' }).then(json);
+
+export const createScheduledReport = (payload) =>
+  fetch(`${API}/api/admin/scheduled-reports`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify(payload),
+  }).then(json);
+
+export const deleteScheduledReport = (id) =>
+  fetch(`${API}/api/admin/scheduled-reports/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    credentials: 'include',
+  }).then(json);
+
+export const verifyBackupCode = (code) =>
+  fetch(`${API}/api/auth/2fa/verify-backup-code`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ code }),
+  }).then(json);
+
+export const logoutAll = () =>
+  fetch(`${API}/api/auth/logout-all`, { method: 'POST', credentials: 'include' }).then(json);
+
 
 
 

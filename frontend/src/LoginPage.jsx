@@ -6,6 +6,7 @@ import {
   verifyTotp,
   sendEmailOtp,
   verifyEmailOtp,
+  verifyBackupCode,
 } from './api.js';
 
 /* ── Icons ── */
@@ -138,14 +139,16 @@ export default function LoginPage({ onLogin }) {
 
   // Step 2: 2FA State
   const [in2fa, setIn2fa]               = useState(false);
-  const [twoFaMethod, setTwoFaMethod]   = useState('totp'); // 'totp' | 'email'
+  const [twoFaMethod, setTwoFaMethod]   = useState('totp'); // 'totp' | 'email' | 'backup'
   const [maskedEmail, setMaskedEmail]   = useState('');
   const [totpEnabled, setTotpEnabled]   = useState(false);
   const [totpCode, setTotpCode]         = useState('');
   const [emailCode, setEmailCode]       = useState('');
+  const [backupCodeInput, setBackupCodeInput] = useState('');
   const [emailSentMsg, setEmailSentMsg] = useState('');
   const [emailSending, setEmailSending] = useState(false);
   const [cooldown, setCooldown]         = useState(0);
+  const [newBackupCodes, setNewBackupCodes] = useState(null);
 
   // Authenticator Setup State
   const [setupData, setSetupData]       = useState(null);
@@ -258,12 +261,40 @@ export default function LoginPage({ onLogin }) {
       const isSetup = !totpEnabled;
       const res = await verifyTotp(totpCode.trim(), isSetup);
       if (res.ok && res.body?.user) {
+        if (res.body.backupCodes && res.body.backupCodes.length > 0) {
+          setNewBackupCodes(res.body.backupCodes);
+          // Don't auto proceed immediately if backup codes were generated; allow user to save them
+          return;
+        }
         onLogin(res.body.user);
       } else {
         setError(res.body?.error || 'Invalid 6-digit authenticator code.');
       }
     } catch {
       setError('Verification failed. Server unreachable.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  /* ─────────────────────────────────────────────────────────────
+     Handle Backup Code Verification
+  ───────────────────────────────────────────────────────────── */
+  const handleVerifyBackupCode = async (e) => {
+    e.preventDefault();
+    if (!backupCodeInput.trim()) return;
+    setLoading(true);
+    setError('');
+
+    try {
+      const res = await verifyBackupCode(backupCodeInput.trim());
+      if (res.ok && res.body?.user) {
+        onLogin(res.body.user);
+      } else {
+        setError(res.body?.error || 'Invalid backup recovery code.');
+      }
+    } catch {
+      setError('Failed to verify backup code.');
     } finally {
       setLoading(false);
     }
@@ -356,7 +387,7 @@ export default function LoginPage({ onLogin }) {
         {in2fa ? (
           <>
             {/* 2FA Method Selector Tabs */}
-            <div className="lp-2fa-tabs" role="tablist" aria-label="Two-Factor Method">
+            <div className="lp-2fa-tabs" style={{ gridTemplateColumns: '1fr 1fr 1fr' }} role="tablist" aria-label="Two-Factor Method">
               <button
                 type="button"
                 role="tab"
@@ -365,7 +396,7 @@ export default function LoginPage({ onLogin }) {
                 onClick={() => { setTwoFaMethod('totp'); setError(''); }}
               >
                 <PhoneIcon />
-                Authenticator
+                App
               </button>
               <button
                 type="button"
@@ -375,7 +406,16 @@ export default function LoginPage({ onLogin }) {
                 onClick={() => { setTwoFaMethod('email'); setError(''); }}
               >
                 <EmailIcon />
-                Email Code
+                Email
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={twoFaMethod === 'backup'}
+                className={`lp-2fa-tab ${twoFaMethod === 'backup' ? 'lp-2fa-tab--active' : ''}`}
+                onClick={() => { setTwoFaMethod('backup'); setError(''); }}
+              >
+                🔑 Backup
               </button>
             </div>
 
@@ -477,6 +517,68 @@ export default function LoginPage({ onLogin }) {
                     {loading ? 'Verifying…' : 'Verify & Continue'}
                   </button>
                 </form>
+              </div>
+            )}
+
+            {/* Method 3: Backup Recovery Code */}
+            {twoFaMethod === 'backup' && (
+              <div className="lp-2fa-content">
+                <p className="lp-2fa-instruction">
+                  Enter an 8-character one-time backup recovery code generated during setup:
+                </p>
+
+                <form onSubmit={handleVerifyBackupCode} className="lp-form">
+                  <div className="lp-field">
+                    <label className="lp-label">Backup Recovery Code</label>
+                    <input
+                      type="text"
+                      className="lp-input"
+                      placeholder="e.g. a1b2c3d4"
+                      value={backupCodeInput}
+                      onChange={(e) => setBackupCodeInput(e.target.value)}
+                      maxLength={10}
+                      required
+                      autoFocus
+                    />
+                  </div>
+                  <button
+                    type="submit"
+                    className="lp-admin-btn"
+                    disabled={loading || !backupCodeInput.trim()}
+                  >
+                    {loading ? <span className="lp-spinner" /> : null}
+                    {loading ? 'Verifying…' : 'Verify Recovery Code'}
+                  </button>
+                </form>
+              </div>
+            )}
+
+            {/* Generated Backup Codes Dialog */}
+            {newBackupCodes && (
+              <div className="lm-modal-backdrop" role="dialog" aria-modal="true">
+                <div className="lm-modal-card" style={{ maxWidth: 440 }}>
+                  <div className="lm-modal-header">
+                    <span className="lm-modal-title">🔑 Save Your 2FA Backup Codes</span>
+                  </div>
+                  <div className="lm-modal-body">
+                    <p style={{ fontSize: '13px', color: 'var(--ink-2)', lineHeight: 1.4 }}>
+                      Store these one-time codes safely. If you lose access to your authenticator app, each code can be used once to recover access:
+                    </p>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', padding: '12px', background: 'var(--surface-alt)', borderRadius: '8px', border: '1px solid var(--border)' }}>
+                      {newBackupCodes.map((c, i) => (
+                        <code key={i} style={{ fontSize: '14px', fontWeight: 700, color: 'var(--accent)', textAlign: 'center' }}>{c}</code>
+                      ))}
+                    </div>
+                    <button
+                      type="button"
+                      className="lm-btn-primary"
+                      onClick={() => window.location.reload()}
+                      style={{ marginTop: '12px', width: '100%' }}
+                    >
+                      I Have Saved My Codes → Proceed to Login
+                    </button>
+                  </div>
+                </div>
               </div>
             )}
 
