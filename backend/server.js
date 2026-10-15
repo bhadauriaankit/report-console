@@ -809,6 +809,91 @@ app.post('/api/auth/logout', (req, res) => {
   });
 });
 
+// ---------------------------------------------------------------
+// Admin User Management Endpoints (Requires role === 'admin')
+// ---------------------------------------------------------------
+const requireAdmin = (req, res, next) => {
+  if (req.session?.user?.role !== 'admin') {
+    return res.status(403).json({ error: 'Access forbidden: Administrator privileges required' });
+  }
+  next();
+};
+
+// POST /api/admin/users/:id/reset-2fa — Admin can reset 2FA for a locked user
+app.post('/api/admin/users/:id/reset-2fa', requireAdmin, async (req, res) => {
+  const userId = parseInt(req.params.id, 10);
+  if (!userId) return res.status(400).json({ error: 'Invalid user ID' });
+
+  try {
+    const result = await pgPool.query(
+      `UPDATE public.portal_users
+          SET totp_secret = NULL, totp_enabled = FALSE, last_totp_step = 0
+        WHERE id = $1
+        RETURNING id, username, email`,
+      [userId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    console.log(`[ADMIN ACTION] 2FA reset for user ${result.rows[0].username} (ID: ${userId}) by ${req.session.user.name}`);
+    return res.json({ ok: true, message: `2FA reset successfully for user "${result.rows[0].username}". They can set up 2FA again on their next login.` });
+  } catch (err) {
+    console.error('[admin/reset-2fa]', err.message);
+    return res.status(500).json({ error: 'Database error resetting 2FA' });
+  }
+});
+
+// POST /api/admin/users/:id/role — Admin can promote/demote a user
+app.post('/api/admin/users/:id/role', requireAdmin, express.json(), async (req, res) => {
+  const userId = parseInt(req.params.id, 10);
+  const { role } = req.body || {};
+  if (!userId || !['admin', 'user'].includes(role)) {
+    return res.status(400).json({ error: 'Invalid user ID or role (must be "admin" or "user")' });
+  }
+
+  try {
+    const result = await pgPool.query(
+      `UPDATE public.portal_users SET role = $1 WHERE id = $2 RETURNING id, username, email, role`,
+      [role, userId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    console.log(`[ADMIN ACTION] Role changed to ${role} for user ${result.rows[0].username} by ${req.session.user.name}`);
+    return res.json({ ok: true, user: result.rows[0] });
+  } catch (err) {
+    console.error('[admin/role]', err.message);
+    return res.status(500).json({ error: 'Database error updating role' });
+  }
+});
+
+// DELETE /api/admin/users/:id — Admin can remove a user
+app.delete('/api/admin/users/:id', requireAdmin, async (req, res) => {
+  const userId = parseInt(req.params.id, 10);
+  if (!userId) return res.status(400).json({ error: 'Invalid user ID' });
+
+  try {
+    const result = await pgPool.query(
+      `DELETE FROM public.portal_users WHERE id = $1 RETURNING id, username`,
+      [userId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    console.log(`[ADMIN ACTION] User ${result.rows[0].username} deleted by ${req.session.user.name}`);
+    return res.json({ ok: true, message: `User "${result.rows[0].username}" deleted successfully.` });
+  } catch (err) {
+    console.error('[admin/delete-user]', err.message);
+    return res.status(500).json({ error: 'Database error deleting user' });
+  }
+});
+
 
 
 

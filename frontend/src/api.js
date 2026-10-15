@@ -107,5 +107,27 @@ export const verifyEmailOtp = (code) =>
 export const logout = () =>
   fetch(`${API}/api/auth/logout`, { method: 'POST', credentials: 'include' }).then(json);
 
+// ── Admin User Management helpers ──
+export const adminResetUser2fa = (userId) =>
+  fetch(`${API}/api/admin/users/${encodeURIComponent(userId)}/reset-2fa`, {
+    method: 'POST',
+    credentials: 'include',
+  }).then(json);
+
+export const adminUpdateUserRole = (userId, role) =>
+  fetch(`${API}/api/admin/users/${encodeURIComponent(userId)}/role`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ role }),
+  }).then(json);
+
+export const adminDeleteUser = (userId) =>
+  fetch(`${API}/api/admin/users/${encodeURIComponent(userId)}`, {
+    method: 'DELETE',
+    credentials: 'include',
+  }).then(json);
+
+
 
 

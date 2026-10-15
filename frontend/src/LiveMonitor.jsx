@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
-import { getPgTables, getPgRows, pgStreamUrl, getPgFileUrl } from './api.js';
+import { getPgTables, getPgRows, pgStreamUrl, getPgFileUrl, adminResetUser2fa, adminUpdateUserRole, adminDeleteUser } from './api.js';
 import MediaModal from './MediaModal.jsx';
+import { showToast } from './main.jsx';
 import './LiveMonitor.css';
 
 /* ── Helpers ── */
@@ -329,9 +330,13 @@ function MonitorTable({
   sortDir,
   onSort,
   startIndex = 0,
+  onInspectRow,
+  isAdmin = false,
+  tableName = '',
 }) {
   if (!rows || rows.length === 0) return null;
   const columns = Object.keys(rows[0]);
+  const isPortalUsers = tableName.toLowerCase() === 'portal_users';
 
   return (
     <>
@@ -358,14 +363,15 @@ function MonitorTable({
                   </div>
                 </th>
               ))}
+              <th className="lm-th-actions">Actions</th>
             </tr>
           </thead>
           <tbody>
             {rows.map((row, i) => (
-              <tr key={i} className={newIds.has(i) ? 'lm-row-new' : ''}>
-                <td className="lm-td-idx">{startIndex + i + 1}</td>
+              <tr key={i} className={`${newIds.has(i) ? 'lm-row-new' : ''} lm-row-clickable`}>
+                <td className="lm-td-idx" onClick={() => onInspectRow(row)}>{startIndex + i + 1}</td>
                 {columns.map((c) => (
-                  <td key={c}>
+                  <td key={c} onClick={() => onInspectRow(row)}>
                     <MediaCell
                       col={c}
                       val={row[c]}
@@ -375,6 +381,19 @@ function MonitorTable({
                     />
                   </td>
                 ))}
+                <td className="lm-td-actions">
+                  <button
+                    type="button"
+                    className="lm-btn-row-action"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onInspectRow(row);
+                    }}
+                    title="View full record details"
+                  >
+                    🔍 Inspect
+                  </button>
+                </td>
               </tr>
             ))}
           </tbody>
@@ -384,18 +403,31 @@ function MonitorTable({
       {/* Mobile Stacked Card View (Under 640px) */}
       <div className="lm-mobile-cards" role="region" aria-label="Database Records Cards">
         {rows.map((row, i) => (
-          <div key={i} className={`lm-mobile-card ${newIds.has(i) ? 'lm-row-new' : ''}`}>
+          <div key={i} className={`lm-mobile-card ${newIds.has(i) ? 'lm-row-new' : ''}`} onClick={() => onInspectRow(row)}>
             <div className="lm-card-top-row">
               <span className="lm-card-index">#{startIndex + i + 1}</span>
-              {row.status && (
-                <MediaCell
-                  col="status"
-                  val={row.status}
-                  rowIndex={startIndex + i}
-                  onPreview={onPreview}
-                  onDownload={onDownload}
-                />
-              )}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                {row.status && (
+                  <MediaCell
+                    col="status"
+                    val={row.status}
+                    rowIndex={startIndex + i}
+                    onPreview={onPreview}
+                    onDownload={onDownload}
+                  />
+                )}
+                <button
+                  type="button"
+                  className="lm-btn-row-action"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onInspectRow(row);
+                  }}
+                  title="View full record details"
+                >
+                  🔍 Inspect
+                </button>
+              </div>
             </div>
             <div className="lm-card-body-grid">
               {columns.map((c) => {
@@ -424,7 +456,7 @@ function MonitorTable({
 }
 
 /* ── Main LiveMonitor Component ── */
-export default function LiveMonitor() {
+export default function LiveMonitor({ currentUser }) {
   const [tables, setTables]         = useState([]);
   const [table, setTable]           = useState('');
   const [rows, setRows]             = useState([]);
@@ -460,6 +492,68 @@ export default function LiveMonitor() {
 
   /* ── Modal preview state ── */
   const [activeMedia, setActiveMedia] = useState(null);
+  const [inspectedRow, setInspectedRow] = useState(null);
+
+  /* ── Admin User Management Actions ── */
+  const handleReset2fa = async (userId, username) => {
+    if (!window.confirm(`Are you sure you want to reset 2FA for user "${username}"? They will be prompted to set up their authenticator again on their next login.`)) {
+      return;
+    }
+    try {
+      const res = await adminResetUser2fa(userId);
+      if (res.ok) {
+        showToast(res.body?.message || '2FA reset successfully', 'success');
+        setRows((prev) =>
+          prev.map((r) => (r.id === userId ? { ...r, totp_enabled: false, totp_secret: 'None' } : r))
+        );
+        if (inspectedRow?.id === userId) {
+          setInspectedRow((prev) => ({ ...prev, totp_enabled: false, totp_secret: 'None' }));
+        }
+      } else {
+        showToast(res.body?.error || 'Failed to reset 2FA', 'error');
+      }
+    } catch (e) {
+      showToast(e.message, 'error');
+    }
+  };
+
+  const handleToggleRole = async (userId, newRole) => {
+    if (!window.confirm(`Change this user's role to "${newRole}"?`)) return;
+    try {
+      const res = await adminUpdateUserRole(userId, newRole);
+      if (res.ok) {
+        showToast(`Role updated to ${newRole}`, 'success');
+        setRows((prev) =>
+          prev.map((r) => (r.id === userId ? { ...r, role: newRole } : r))
+        );
+        if (inspectedRow?.id === userId) {
+          setInspectedRow((prev) => ({ ...prev, role: newRole }));
+        }
+      } else {
+        showToast(res.body?.error || 'Failed to update role', 'error');
+      }
+    } catch (e) {
+      showToast(e.message, 'error');
+    }
+  };
+
+  const handleDeleteUser = async (userId, username) => {
+    if (!window.confirm(`Are you sure you want to permanently delete user "${username}"? This action cannot be undone.`)) {
+      return;
+    }
+    try {
+      const res = await adminDeleteUser(userId);
+      if (res.ok) {
+        showToast(res.body?.message || 'User deleted', 'success');
+        setRows((prev) => prev.filter((r) => r.id !== userId));
+        setInspectedRow(null);
+      } else {
+        showToast(res.body?.error || 'Failed to delete user', 'error');
+      }
+    } catch (e) {
+      showToast(e.message, 'error');
+    }
+  };
 
   const esRef = useRef(null);
 
@@ -997,6 +1091,9 @@ export default function LiveMonitor() {
               sortDir={sortDir}
               onSort={handleSort}
               startIndex={(page - 1) * pageSize}
+              onInspectRow={(row) => setInspectedRow(row)}
+              isAdmin={currentUser?.role === 'admin'}
+              tableName={table}
             />
 
             {/* Pagination Controls Bar */}
@@ -1050,6 +1147,76 @@ export default function LiveMonitor() {
           </>
         )}
       </div>
+
+      {/* ── Row Details & Admin Actions Modal ── */}
+      {inspectedRow && (
+        <div className="lm-modal-backdrop" onClick={() => setInspectedRow(null)} role="dialog" aria-modal="true" aria-label="Record Details">
+          <div className="lm-modal-card" onClick={(e) => e.stopPropagation()}>
+            <div className="lm-modal-header">
+              <span className="lm-modal-title">
+                📋 Record Details — <span style={{ color: 'var(--accent)' }}>{table}</span>
+              </span>
+              <button
+                type="button"
+                className="lm-modal-close-btn"
+                onClick={() => setInspectedRow(null)}
+                aria-label="Close record details"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="lm-modal-body">
+              <div className="lm-detail-grid">
+                {Object.entries(inspectedRow).map(([k, v]) => (
+                  <div key={k} style={{ display: 'contents' }}>
+                    <span className="lm-detail-key">{toLabel(k)}:</span>
+                    <span className="lm-detail-val">
+                      {v === null || v === undefined ? '—' : String(v)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+
+                {/* If inspecting portal_users table as Admin -> Show Management Actions */}
+              {currentUser?.role === 'admin' && table.toLowerCase() === 'portal_users' && inspectedRow.id && (
+                <div className="lm-admin-action-section">
+                  <div className="lm-admin-action-title">
+                    👑 Administrator User Management
+                  </div>
+                  <div className="lm-admin-buttons">
+                    <button
+                      type="button"
+                      className="lm-btn-row-action"
+                      onClick={() => handleReset2fa(inspectedRow.id, inspectedRow.username)}
+                      title="Reset TOTP 2FA so user can configure on next login"
+                    >
+                      🔄 Reset 2FA
+                    </button>
+
+                    <button
+                      type="button"
+                      className="lm-btn-row-action"
+                      onClick={() => handleToggleRole(inspectedRow.id, inspectedRow.role === 'admin' ? 'user' : 'admin')}
+                      title={`Change role to ${inspectedRow.role === 'admin' ? 'User' : 'Administrator'}`}
+                    >
+                      {inspectedRow.role === 'admin' ? '👤 Demote to User' : '👑 Promote to Admin'}
+                    </button>
+
+                    <button
+                      type="button"
+                      className="lm-btn-row-action lm-btn-admin-danger"
+                      onClick={() => handleDeleteUser(inspectedRow.id, inspectedRow.username)}
+                      title="Delete this user account"
+                    >
+                      🗑️ Delete User
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── Interactive Preview Modal for HTML & Attachments ── */}
       {activeMedia && (

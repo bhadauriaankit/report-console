@@ -207,7 +207,7 @@ function App() {
       {/* ── Active view wrapped in ErrorBoundary ── */}
       <main id={`panel-${tab}`} role="tabpanel">
         <ErrorBoundary>
-          {tab === 'monitor' && <LiveMonitor />}
+          {tab === 'monitor' && <LiveMonitor currentUser={user} />}
           {tab === 'report'  && <ReportConsole />}
         </ErrorBoundary>
       </main>
